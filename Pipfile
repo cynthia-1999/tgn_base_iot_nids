@@ -1,0 +1,19 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+ipykernel = "*"
+scikit-learn = "*"
+pandas = "*"
+torch = "*"
+dgl-cu113 = {file = "dgl_cu113-0.9.1-cp38-cp38-manylinux1_x86_64.whl"}
+
+[dev-packages]
+
+[requires]
+python_version = "3.8"
+
+[pipenv]
+allow_prereleases = true
