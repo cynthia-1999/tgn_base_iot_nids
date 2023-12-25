@@ -24,12 +24,15 @@ np.random.seed(2021)
 torch.manual_seed(2021)
 
 
-def train(model, dataloader, sampler, criterion, optimizer, args):
+def train(model, dataloader, sampler, criterion, optimizer, args, device):
     model.train()
     total_loss = 0
     batch_cnt = 0
     last_t = time.time()
     for _, positive_pair_g, negative_pair_g, blocks in dataloader:
+        positive_pair_g = positive_pair_g.to(device)
+        negative_pair_g = negative_pair_g.to(device)
+        blocks[0] = blocks[0].to(device)
         optimizer.zero_grad()
         pred_pos, pred_neg = model.embed(
             positive_pair_g, negative_pair_g, blocks)
@@ -50,16 +53,19 @@ def train(model, dataloader, sampler, criterion, optimizer, args):
     return total_loss
 
 
-def test_val(model, dataloader, sampler, criterion, args):
+def test_val(model, dataloader, sampler, criterion, args, device):
     model.eval()
     batch_size = args.batch_size
     total_loss = 0
     aps, aucs = [], []
     batch_cnt = 0
     with torch.no_grad():
-        for _, postive_pair_g, negative_pair_g, blocks in dataloader:
+        for _, positive_pair_g, negative_pair_g, blocks in dataloader:
+            positive_pair_g = positive_pair_g.to(device) 
+            negative_pair_g = negative_pair_g.to(device)
+            blocks[0] = blocks[0].to(device)
             pred_pos, pred_neg = model.embed(
-                postive_pair_g, negative_pair_g, blocks)
+                positive_pair_g, negative_pair_g, blocks)
             loss = criterion(pred_pos, torch.ones_like(pred_pos))
             loss += criterion(pred_neg, torch.zeros_like(pred_neg))
             total_loss += float(loss)*batch_size
@@ -67,7 +73,7 @@ def test_val(model, dataloader, sampler, criterion, args):
             y_true = torch.cat(
                 [torch.ones(pred_pos.size(0)), torch.zeros(pred_neg.size(0))], dim=0)
             if not args.not_use_memory:
-                model.update_memory(postive_pair_g)
+                model.update_memory(positive_pair_g)
             if args.fast_mode:
                 sampler.attach_last_update(model.memory.last_update_t)
             aps.append(average_precision_score(y_true, y_pred))
@@ -81,6 +87,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--epochs", type=int, default=50,
                         help='epochs for training on entire dataset')
+    parser.add_argument("--device_id", type=int,
+                        default=0, help="gpu device id")
     parser.add_argument("--batch_size", type=int,
                         default=200, help="Size of each batch")
     parser.add_argument("--embedding_dim", type=int, default=100,
@@ -119,6 +127,8 @@ if __name__ == "__main__":
     if args.k_hop != 1:
         assert args.simple_mode, "this k-hop parameter only support simple mode"
 
+    device = torch.device("cuda:" + str(args.device_id) if torch.cuda.is_available() else "cpu")
+    
     if args.dataset == 'wikipedia':
         data = TemporalWikipediaDataset()
     elif args.dataset == 'reddit':
@@ -127,6 +137,7 @@ if __name__ == "__main__":
         print("Warning Using Untested Dataset: "+args.dataset)
         data = TemporalDataset(args.dataset)
 
+    # data = data.to(device)
     # Pre-process data, mask new node in test set from original graph
     num_nodes = data.num_nodes()
     num_edges = data.num_edges()
@@ -252,7 +263,7 @@ if __name__ == "__main__":
                 num_nodes=num_node,
                 n_neighbors=args.n_neighbors,
                 memory_updater_type=args.memory_updater,
-                layers=args.k_hop)
+                layers=args.k_hop, device=device).to(device)
 
     criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
@@ -262,23 +273,23 @@ if __name__ == "__main__":
         sampler.reset()
     try:
         for i in range(args.epochs):
-            train_loss = train(model, train_dataloader, sampler,
-                               criterion, optimizer, args)
-
+            print("epoch ", i)
+            train_loss = train(model, train_dataloader, sampler, 
+                               criterion, optimizer, args, device)
             val_ap, val_auc = test_val(
-                model, valid_dataloader, sampler, criterion, args)
+                model, valid_dataloader, sampler, criterion, args, device)
             memory_checkpoint = model.store_memory()
             if args.fast_mode:
                 new_node_sampler.sync(sampler)
             test_ap, test_auc = test_val(
-                model, test_dataloader, sampler, criterion, args)
+                model, test_dataloader, sampler, criterion, args, device)
             model.restore_memory(memory_checkpoint)
             if args.fast_mode:
                 sample_nn = new_node_sampler
             else:
                 sample_nn = sampler
             nn_test_ap, nn_test_auc = test_val(
-                model, test_new_node_dataloader, sample_nn, criterion, args)
+                model, test_new_node_dataloader, sample_nn, criterion, args, device)
             log_content = []
             log_content.append("Epoch: {}; Training Loss: {} | Validation AP: {:.3f} AUC: {:.3f}\n".format(
                 i, train_loss, val_ap, val_auc))

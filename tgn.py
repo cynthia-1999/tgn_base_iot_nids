@@ -14,7 +14,8 @@ class TGN(nn.Module):
                  num_nodes,
                  n_neighbors=10,
                  memory_updater_type='gru',
-                 layers=1):
+                 layers=1, 
+                 device='cpu'):
         super(TGN, self).__init__()
         self.memory_dim = memory_dim
         self.edge_feat_dim = edge_feat_dim
@@ -25,16 +26,18 @@ class TGN(nn.Module):
         self.memory_updater_type = memory_updater_type
         self.num_nodes = num_nodes
         self.layers = layers
+        self.device = device
 
-        self.temporal_encoder = TimeEncode(self.temporal_dim)
+        self.temporal_encoder = TimeEncode(self.temporal_dim).to(device)
 
         self.memory = MemoryModule(self.num_nodes,
-                                   self.memory_dim)
+                                   self.memory_dim).to(device)
+        print("self.memory.memory.device:", self.memory.memory.device)
 
         self.memory_ops = MemoryOperation(self.memory_updater_type,
                                           self.memory,
                                           self.edge_feat_dim,
-                                          self.temporal_encoder)
+                                          self.temporal_encoder).to(device)
 
         self.embedding_attn = TemporalTransformerConv(self.edge_feat_dim,
                                                       self.memory_dim,
@@ -42,12 +45,14 @@ class TGN(nn.Module):
                                                       self.embedding_dim,
                                                       self.num_heads,
                                                       layers=self.layers,
-                                                      allow_zero_in_degree=True)
+                                                      allow_zero_in_degree=True).to(device)
 
-        self.msg_linkpredictor = MsgLinkPredictor(embedding_dim)
+        self.msg_linkpredictor = MsgLinkPredictor(embedding_dim).to(device)
 
     def embed(self, postive_graph, negative_graph, blocks):
         emb_graph = blocks[0]
+        print("self.memory.memory.device: ", self.memory.memory.device)
+        print("emb_graph.device: ", emb_graph.device)
         emb_memory = self.memory.memory[emb_graph.ndata[dgl.NID], :]
         emb_t = emb_graph.ndata['timestamp']
         # 过Temporal Transformer捕捉节点的时序特征
@@ -74,6 +79,7 @@ class TGN(nn.Module):
 
     def reset_memory(self):
         self.memory.reset_memory()
+        self.memory = self.memory.to(self.device)
 
     def store_memory(self):
         memory_checkpoint = {}
