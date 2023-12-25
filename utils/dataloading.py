@@ -14,27 +14,6 @@ import dgl.function as fn
 def _prepare_tensor(g, data, name, is_distributed):
     return torch.tensor(data) if is_distributed else dgl.utils.prepare_tensor(g, data, name)
 
-def _pop_subframe_storage(subframe, frame):
-    for key, col in subframe._columns.items():
-        if key in frame._columns and col.storage is frame._columns[key].storage:
-            col.storage = None
-
-def _pop_subgraph_storage(subg, g):
-    for ntype in subg.ntypes:
-        if ntype not in g.ntypes:
-            continue
-        subframe = subg._node_frames[subg.get_ntype_id(ntype)]
-        frame = g._node_frames[g.get_ntype_id(ntype)]
-        _pop_subframe_storage(subframe, frame)
-    for etype in subg.canonical_etypes:
-        if etype not in g.canonical_etypes:
-            continue
-        subframe = subg._edge_frames[subg.get_etype_id(etype)]
-        frame = g._edge_frames[g.get_etype_id(etype)]
-        _pop_subframe_storage(subframe, frame)
-
-
-
 class TemporalSampler(BlockSampler):
     """ Temporal Sampler builds computational and temporal dependency of node representations via
     temporal neighbors selection and screening.
