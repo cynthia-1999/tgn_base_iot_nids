@@ -8,7 +8,7 @@ import dgl
 import torch
 
 from tgn import TGN
-from utils.data_preprocess import TemporalWikipediaDataset, TemporalRedditDataset, TemporalDataset
+from utils.data_preprocess import TemporalWikipediaDataset, TemporalRedditDataset, TemporalDataset, TemporalBotiotDataset
 from utils.dataloading import (FastTemporalEdgeCollator, FastTemporalSampler,
                          SimpleTemporalEdgeCollator, SimpleTemporalSampler,
                          TemporalEdgeDataLoader, TemporalSampler, TemporalEdgeCollator)
@@ -88,9 +88,9 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=50,
                         help='epochs for training on entire dataset')
     parser.add_argument("--device_id", type=int,
-                        default=0, help="gpu device id")
+                        default=1, help="gpu device id")
     parser.add_argument("--batch_size", type=int,
-                        default=200, help="Size of each batch")
+                        default=50, help="Size of each batch")
     parser.add_argument("--embedding_dim", type=int, default=100,
                         help="Embedding dim for link prediction")
     parser.add_argument("--memory_dim", type=int, default=100,
@@ -133,6 +133,8 @@ if __name__ == "__main__":
         data = TemporalWikipediaDataset()
     elif args.dataset == 'reddit':
         data = TemporalRedditDataset()
+    elif args.dataset == 'BoT-IoT':
+        data = TemporalBotiotDataset()
     else:
         print("Warning Using Untested Dataset: "+args.dataset)
         data = TemporalDataset(args.dataset)
@@ -188,8 +190,9 @@ if __name__ == "__main__":
         sampler = TemporalSampler(k=args.n_neighbors)
         edge_collator = TemporalEdgeCollator
 
+    # ToDo: remove negative edge
     neg_sampler = dgl.dataloading.negative_sampler.Uniform(
-        k=args.num_negative_samples)
+        k=0)
     # Set Train, validation, test and new node test id
     train_seed = torch.arange(int(TRAIN_SPLIT*graph_no_new_node.num_edges()))
     valid_seed = torch.arange(int(
