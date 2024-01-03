@@ -23,6 +23,27 @@ class Identity(nn.Module):
         """Return input"""
         return x
 
+class MsgMalPredictor(nn.Module):
+    def __init__(self, emb_dim):
+        super(MsgMalPredictor, self).__init__()
+        self.src_fc = nn.Linear(emb_dim, emb_dim)
+        self.dst_fc = nn.Linear(emb_dim, emb_dim)
+        self.out_fc = nn.Linear(emb_dim, 1)
+
+    def mal_pred(self, edges):
+        src_hid = self.src_fc(edges.src['embedding'])
+        dst_hid = self.dst_fc(edges.dst['embedding'])
+        score = F.relu(src_hid+dst_hid)
+        score = self.out_fc(score)
+        return {'score': score}
+
+    def forward(self, x, g):
+        # Local Scope?
+        g.ndata['embedding'] = x
+        g.apply_edges(self.mal_pred)
+        escore = g.edata['score']
+        return escore
+
 # 一个用于链接预测的模块，使用消息传递的方式来预测正样本子图和负样本子图之间的链接
 # 这个模块的目的是从子图中学习链接预测任务，其中正样本子图和负样本子图都包含节点特征以及它们之间的链接信息。
 # 通过消息传递和神经网络的组合，模块试图学习如何从节点特征中预测链接的存在或缺失。

@@ -78,9 +78,12 @@ class TemporalSampler(BlockSampler):
             zip(temp2origin.tolist(), temporal_subgraph.nodes().tolist()))
         temporal_subgraph.ndata[dgl.NID] = g.ndata[dgl.NID][temp2origin]
         seed_nodes = [root2sub_dict[int(n)] for n in seed_nodes]
-        final_subgraph = self.sampler(g=temporal_subgraph, nodes=seed_nodes)
+        device = g.device
+        cpu_temporal_subgraph = temporal_subgraph.to(torch.device('cpu'))
+        # cpu_seed_nodes = seed_nodes.to(torch.device('cpu'))
+        final_subgraph = self.sampler(g=cpu_temporal_subgraph, nodes=seed_nodes)
         final_subgraph.remove_self_loop()
-        return final_subgraph
+        return final_subgraph.to(device)
 
         # Temporal Subgraph
         
@@ -174,6 +177,11 @@ class TemporalEdgeCollator(EdgeCollator):
     Please refers to examples/pytorch/tgn/train.py
 
     """
+    def __init__(self, g, eids, graph_sampler, device='cpu', g_sampling=None, exclude=None,
+                reverse_eids=None, reverse_etypes=None, negative_sampler=None):
+        super(TemporalEdgeCollator, self).__init__(g, eids, graph_sampler,
+                                                         g_sampling, exclude, reverse_eids, reverse_etypes, negative_sampler)
+        self.device = torch.device(device)
 
     # 创建子图以捕获时间和计算依赖性，并准备用于训练或评估图神经网络的数据块。
     def _collate_with_negative_sampling(self, items):
@@ -217,7 +225,7 @@ class TemporalEdgeCollator(EdgeCollator):
             nodes_id.append(subg.srcdata[dgl.NID])
             batch_graphs.append(subg)
         timestamps = torch.tensor(timestamps).repeat_interleave(
-            self.negative_sampler.k)
+            self.negative_sampler.k).to(self.device)
         for i, neg_edge in enumerate(zip(neg_srcdst_raw[0].tolist(), neg_srcdst_raw[1].tolist())):
             ts = timestamps[i]
             subg = self.graph_sampler.sample_blocks(self.g_sampling,
@@ -226,8 +234,37 @@ class TemporalEdgeCollator(EdgeCollator):
             subg.ndata['timestamp'] = ts.repeat(subg.num_nodes())
             batch_graphs.append(subg)
         blocks = [dgl.batch(batch_graphs)]
-        input_nodes = torch.cat(nodes_id)
+        input_nodes = torch.cat(nodes_id).to(self.device)
         return input_nodes, pair_graph, neg_pair_graph, blocks
+    
+    def _collate(self, items):
+        items = _prepare_tensor(self.g_sampling, items, 'items', False)
+        # Here node id will not change
+        pair_graph = self.g.edge_subgraph(items, relabel_nodes=False)
+        induced_edges = pair_graph.edata[dgl.EID]
+        pair_graph = dgl.transforms.compact_graphs(pair_graph)
+
+        # Need to remap id
+        pair_graph.ndata[dgl.NID] = self.g.nodes()[pair_graph.ndata[dgl.NID]]
+        pair_graph.edata[dgl.EID] = induced_edges
+
+        batch_graphs = []
+        nodes_id = []
+        timestamps = []
+
+        # 根据 items 中的每条边，使用邻居采样器 graph_sampler 对时间子图进行采样，并将采样得到的子图添加到 batch_graphs 列表中。
+        for i, edge in enumerate(zip(self.g.edges()[0][items], self.g.edges()[1][items])):
+            ts = pair_graph.edata['timestamp'][i]
+            timestamps.append(ts)
+            subg = self.graph_sampler.sample_blocks(self.g_sampling,
+                                                    list(edge),
+                                                    timestamp=ts)[0]
+            subg.ndata['timestamp'] = ts.repeat(subg.num_nodes())
+            nodes_id.append(subg.srcdata[dgl.NID])
+            batch_graphs.append(subg)
+        blocks = [dgl.batch(batch_graphs)]
+        input_nodes = torch.cat(nodes_id).to(self.device)
+        return input_nodes, pair_graph, blocks
 
     # 将边ID列表转换为一个数据块，并在其中执行一些操作，以准备好用于图神经网络的训练或评估。这些操作包括移除与输入图和采样图相关的子图存储，可能是为了减少内存占用和优化性能。
     def collator(self, items):
@@ -281,7 +318,7 @@ class TemporalEdgeDataLoader(EdgeDataLoader):
                 collator_kwargs[k] = v
             else:
                 dataloader_kwargs[k] = v
-        self.collator = collator(g, eids, graph_sampler, **collator_kwargs)
+        self.collator = collator(g, eids, graph_sampler, device, **collator_kwargs)
 
         assert not isinstance(g, dgl.distributed.DistGraph), \
             'EdgeDataLoader does not support DistGraph for now. ' \
@@ -334,6 +371,7 @@ class FastTemporalSampler(BlockSampler):
     def __init__(self, g, k, device='cpu'):
         self.k = k
         self.g = g
+        self.device = torch.device(device)
         num_nodes = g.num_nodes()
         # 创建用于存储邻居信息的张量，neighbors、e_id、__assoc__
         self.neighbors = torch.empty(
@@ -343,7 +381,7 @@ class FastTemporalSampler(BlockSampler):
         self.__assoc__ = torch.empty(
             num_nodes, dtype=torch.long, device=device)
         # 记录上次更新时间的张量last_update
-        self.last_update = torch.zeros(num_nodes, dtype=torch.double)
+        self.last_update = torch.zeros(num_nodes, dtype=torch.double).to(self.device)
         self.reset()
 
     # 根据输入的种子节点生成一个时间和计算相关的子图，包括选择有效的邻居节点、处理孤立节点、复制特征和时间戳等操作。生成的子图可以用于后续的计算和图神经网络训练。
@@ -355,7 +393,7 @@ class FastTemporalSampler(BlockSampler):
         # Here Assume n_id is the bg nid
         neighbors = self.neighbors[n_id]
         # 将种子节点nid扩展成一个形状为 (len(n_id), k) 的张量 nodes
-        nodes = n_id.view(-1, 1).repeat(1, self.k)
+        nodes = n_id.view(-1, 1).repeat(1, self.k).to(self.device)
         e_id = self.e_id[n_id]
         mask = e_id >= 0
 
@@ -372,7 +410,7 @@ class FastTemporalSampler(BlockSampler):
         e_id = e_id[mask]
         neighbors = neighbors.flatten()
         nodes = nodes.flatten()
-        n_id = torch.cat([nodes, neighbors]).unique()
+        n_id = torch.cat([nodes, neighbors]).unique().to(self.device)
         
         # 为新的节点ID列表创建一个关联映射，将节点ID映射到连续的整数值。这个映射存储在 self.__assoc__ 中。
         self.__assoc__[n_id] = torch.arange(n_id.size(0), device=n_id.device)
@@ -380,19 +418,21 @@ class FastTemporalSampler(BlockSampler):
         # 根据关联映射将邻居节点和有效节点映射为连续的整数值
         neighbors, nodes = self.__assoc__[neighbors], self.__assoc__[nodes]
         # 基于映射后的节点ID创建一个子图subg，其中的边连接了有效节点和它们的邻居节点
-        subg = dgl.graph((nodes, neighbors))
+        subg = dgl.graph((nodes, neighbors)).to(self.device)
 
         # New node to complement orphans which haven't created
         subg.add_nodes(len(orphans))
 
         # Copy the seed node feature to subgraph
-        subg.edata['timestamp'] = torch.zeros(subg.num_edges()).double()
+        subg.edata['timestamp'] = torch.zeros(subg.num_edges()).double().to(self.device)
+        print("e_id.device:", e_id.device)
+        print("self.g.edata['timestamp'].device:", self.g.edata['timestamp'].device)
         subg.edata['timestamp'] = self.g.edata['timestamp'][e_id]
 
         n_id = torch.cat([n_id, orphans])
         subg.ndata['timestamp'] = self.last_update[n_id]
         subg.edata['feats'] = torch.zeros(
-            (subg.num_edges(), self.g.edata['feats'].shape[1])).float()
+            (subg.num_edges(), self.g.edata['feats'].shape[1])).float().to(self.device)
         subg.edata['feats'] = self.g.edata['feats'][e_id]
         subg = dgl.add_self_loop(subg)
         # 为子图的节点创建一个nid字段，并将其设置为节点ID列表
@@ -571,6 +611,11 @@ class FastTemporalEdgeCollator(EdgeCollator):
     Please refers to examples/pytorch/tgn/train.py
 
     """
+    def __init__(self, g, eids, graph_sampler, device='cpu', g_sampling=None, exclude=None,
+                reverse_eids=None, reverse_etypes=None, negative_sampler=None):
+        super(FastTemporalEdgeCollator, self).__init__(g, eids, graph_sampler,
+                                                         g_sampling, exclude, reverse_eids, reverse_etypes, negative_sampler)
+        self.device = torch.device(device)
 
     # 生成包含正样本和负样本的数据块，并返回相关信息
     def _collate_with_negative_sampling(self, items):
@@ -603,7 +648,7 @@ class FastTemporalEdgeCollator(EdgeCollator):
         seed_nodes = pair_graph.ndata[dgl.NID]
         blocks = self.graph_sampler.sample_blocks(self.g_sampling, seed_nodes)
         blocks[0].ndata['timestamp'] = torch.zeros(
-            blocks[0].num_nodes()).double()
+            blocks[0].num_nodes()).double().to(self.device)
         input_nodes = blocks[0].edges()[1]
 
         # update sampler
@@ -612,6 +657,29 @@ class FastTemporalEdgeCollator(EdgeCollator):
         self.graph_sampler.add_edges(_src, _dst)
         return input_nodes, pair_graph, neg_pair_graph, blocks
 
+    def _collate(self, items):
+        items = _prepare_tensor(self.g_sampling, items, 'items', False)
+        # Here node id will not change
+        pair_graph = self.g.edge_subgraph(items, relabel_nodes=False)
+        induced_edges = pair_graph.edata[dgl.EID]
+        pair_graph = dgl.transforms.compact_graphs(pair_graph)
+        
+        # Need to remap id
+        pair_graph.ndata[dgl.NID] = self.g.nodes()[pair_graph.ndata[dgl.NID]]
+        pair_graph.edata[dgl.EID] = induced_edges
+
+        seed_nodes = pair_graph.ndata[dgl.NID]
+        blocks = self.graph_sampler.sample_blocks(self.g_sampling, seed_nodes)
+        blocks[0].ndata['timestamp'] = torch.zeros(
+            blocks[0].num_nodes()).double().to(self.device)
+        input_nodes = blocks[0].edges()[1]
+
+        # update sampler
+        _src = self.g.nodes()[self.g.edges()[0][items]]
+        _dst = self.g.nodes()[self.g.edges()[1][items]]
+        self.graph_sampler.add_edges(_src, _dst)
+        return input_nodes, pair_graph, blocks
+    
     # 数据合并，
     def collator(self, items):
         result = super().collate(items)
@@ -657,12 +725,16 @@ class SimpleTemporalSampler(BlockSampler):
         # List of neighbors to sample per edge type for each GNN layer, starting from the first layer.
         g = dgl.in_subgraph(g, seed_nodes)
         g.remove_edges(torch.where(g.edata['timestamp'] > self.ts)[0])  # Deleting the the edges that happen after the current timestamp
-
+        device = g.device
+        
         if fanout is None:  # full neighborhood sampling
             frontier = g
         else:
-            frontier = dgl.sampling.select_topk(g, fanout, 'timestamp', seed_nodes)  # most recent timestamp edge sampling
+            cpu_g = g.to(torch.device('cpu'))
+            cpu_seed_nodes = seed_nodes.to(torch.device('cpu'))
+            frontier = dgl.sampling.select_topk(cpu_g, fanout, 'timestamp', cpu_seed_nodes)  # most recent timestamp edge sampling
         self.frontiers[block_id] = frontier  # save frontier
+        frontier = frontier.to(device)
         return frontier
 
 
@@ -735,11 +807,12 @@ class SimpleTemporalEdgeCollator(EdgeCollator):
         A set of builtin negative samplers are provided in
         :ref:`the negative sampling module <api-dataloading-negative-sampling>`.
     '''
-    def __init__(self, g, eids, graph_sampler, g_sampling=None, exclude=None,
+    def __init__(self, g, eids, graph_sampler, device='cpu', g_sampling=None, exclude=None,
                 reverse_eids=None, reverse_etypes=None, negative_sampler=None):
         super(SimpleTemporalEdgeCollator, self).__init__(g, eids, graph_sampler,
                                                          g_sampling, exclude, reverse_eids, reverse_etypes, negative_sampler)
         self.n_layer = len(self.graph_sampler.fanouts)
+        self.device = torch.device(device)
 
     def collate(self,items):
         '''
