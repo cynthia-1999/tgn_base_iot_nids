@@ -250,12 +250,10 @@ class TemporalEdgeCollator(EdgeCollator):
 
         batch_graphs = []
         nodes_id = []
-        timestamps = []
 
         # 根据 items 中的每条边，使用邻居采样器 graph_sampler 对时间子图进行采样，并将采样得到的子图添加到 batch_graphs 列表中。
         for i, edge in enumerate(zip(self.g.edges()[0][items], self.g.edges()[1][items])):
             ts = pair_graph.edata['timestamp'][i]
-            timestamps.append(ts)
             subg = self.graph_sampler.sample_blocks(self.g_sampling,
                                                     list(edge),
                                                     timestamp=ts)[0]
@@ -425,8 +423,6 @@ class FastTemporalSampler(BlockSampler):
 
         # Copy the seed node feature to subgraph
         subg.edata['timestamp'] = torch.zeros(subg.num_edges()).double().to(self.device)
-        print("e_id.device:", e_id.device)
-        print("self.g.edata['timestamp'].device:", self.g.edata['timestamp'].device)
         subg.edata['timestamp'] = self.g.edata['timestamp'][e_id]
 
         n_id = torch.cat([n_id, orphans])
@@ -462,7 +458,7 @@ class FastTemporalSampler(BlockSampler):
         """
         neighbors = torch.cat([src, dst], dim=0)
         nodes = torch.cat([dst, src], dim=0)
-        # 为新边氛围eid
+        # 为新边分配eid
         e_id = torch.arange(self.cur_e_id, self.cur_e_id + src.size(0),
                             device=src.device).repeat(2)
         self.cur_e_id += src.numel()
@@ -476,12 +472,12 @@ class FastTemporalSampler(BlockSampler):
         n_id = nodes.unique()
         self.__assoc__[n_id] = torch.arange(n_id.numel(), device=n_id.device)
 
-        # 这部分代码的作用是处理新输入的边和节点信息，将其整合到快速查询查找表中，以确保查询查找表包含最新的信息。
         dense_id = torch.arange(nodes.size(0), device=nodes.device) % self.k
         dense_id += self.__assoc__[nodes].mul_(self.k)
 
         dense_e_id = e_id.new_full((n_id.numel() * self.k, ), -1)
         dense_e_id[dense_id] = e_id
+        # 将一维张量转成二维，每行包含self.k个元素
         dense_e_id = dense_e_id.view(-1, self.k)
 
         dense_neighbors = e_id.new_empty(n_id.numel() * self.k)
