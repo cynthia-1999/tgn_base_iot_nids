@@ -32,6 +32,7 @@ def train(model, dataloader, sampler, criterion, optimizer, args, device):
     # for _, positive_pair_g, negative_pair_g, blocks in dataloader:
     for _, positive_pair_g, blocks in dataloader:
         positive_pair_g = positive_pair_g.to(device)
+        # ToDo：使用图对比学习
         # negative_pair_g = negative_pair_g.to(device)
         blocks[0] = blocks[0].to(device)
         optimizer.zero_grad()
@@ -44,6 +45,7 @@ def train(model, dataloader, sampler, criterion, optimizer, args, device):
         loss.backward(retain_graph=retain_graph)
         optimizer.step()
         model.detach_memory()
+        # ToDo: 更新内存的时机应该在预测之前
         if not args.not_use_memory:
             model.update_memory(positive_pair_g)
         if args.fast_mode:
@@ -84,10 +86,10 @@ def test_val(model, dataloader, sampler, criterion, args, device):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--epochs", type=int, default=50,
+    parser.add_argument("--epochs", type=int, default=1,
                         help='epochs for training on entire dataset')
     parser.add_argument("--device_id", type=int,
-                        default=2, help="gpu device id")
+                        default=1, help="gpu device id")
     parser.add_argument("--batch_size", type=int,
                         default=50, help="Size of each batch")
     parser.add_argument("--embedding_dim", type=int, default=100,
@@ -145,7 +147,9 @@ if __name__ == "__main__":
     num_edges = data.num_edges()
 
     num_edges = data.num_edges()
+    print("num_edges:", num_edges)
     trainval_div = int(VALID_SPLIT*num_edges)
+    print("trainval_div:", trainval_div)
 
     # Select new node from test set and remove them from entire graph
     test_split_ts = data.edata['timestamp'][trainval_div]
@@ -153,9 +157,13 @@ if __name__ == "__main__":
                            1][trainval_div:]]).unique().numpy()
     test_new_nodes = np.random.choice(
         test_nodes, int(0.1*len(test_nodes)), replace=False)
+    print("test_new_nodes:", test_new_nodes)
 
+    # indegree
     in_subg = dgl.in_subgraph(data, test_new_nodes)
+    # outdegree
     out_subg = dgl.out_subgraph(data, test_new_nodes)
+    
     # Remove edge who happen before the test set to prevent from learning the connection info
     new_node_in_eid_delete = in_subg.edata[dgl.EID][in_subg.edata['timestamp'] < test_split_ts]
     new_node_out_eid_delete = out_subg.edata[dgl.EID][out_subg.edata['timestamp'] < test_split_ts]
@@ -176,9 +184,9 @@ if __name__ == "__main__":
 
     # graph_no_new_node and graph_new_node should have same set of nid
 
-    data = data.to(device)
-    graph_no_new_node = graph_no_new_node.to(device)
-    graph_new_node = graph_new_node.to(device)
+    # data = data.to(device)
+    # graph_no_new_node = graph_no_new_node.to(device)
+    # graph_new_node = graph_new_node.to(device)
     # Sampler Initialization
     if args.simple_mode:
         fan_out = [args.n_neighbors for _ in range(args.k_hop)]
@@ -197,28 +205,46 @@ if __name__ == "__main__":
     # neg_sampler = dgl.dataloading.negative_sampler.Uniform(
     #     k=0)
     neg_sampler = None
+    
     # Set Train, validation, test and new node test id
-    train_seed = torch.arange(int(TRAIN_SPLIT*graph_no_new_node.num_edges())).to(device)
+    #  
+    # 不包含新节点的训练数据
+    # train_seed = torch.arange(int(TRAIN_SPLIT*graph_no_new_node.num_edges())).to(device)
+    train_seed = torch.arange(int(TRAIN_SPLIT*graph_no_new_node.num_edges()))
+    # 不包含新节点的验证数据
+    # valid_seed = torch.arange(int(
+    #     TRAIN_SPLIT*graph_no_new_node.num_edges()), trainval_div-new_node_eid_delete.size(0)).to(device)
     valid_seed = torch.arange(int(
-        TRAIN_SPLIT*graph_no_new_node.num_edges()), trainval_div-new_node_eid_delete.size(0)).to(device)
+        TRAIN_SPLIT*graph_no_new_node.num_edges()), trainval_div-new_node_eid_delete.size(0))
+    # 不包含新节点的测试数据
+    # test_seed = torch.arange(
+    #     trainval_div-new_node_eid_delete.size(0), graph_no_new_node.num_edges()).to(device)
     test_seed = torch.arange(
-        trainval_div-new_node_eid_delete.size(0), graph_no_new_node.num_edges()).to(device)
+        trainval_div-new_node_eid_delete.size(0), graph_no_new_node.num_edges())
+    # 包含新节点的测试数据
+    # test_new_node_seed = torch.arange(
+    #     trainval_div-new_node_eid_delete.size(0), graph_new_node.num_edges()).to(device)
     test_new_node_seed = torch.arange(
-        trainval_div-new_node_eid_delete.size(0), graph_new_node.num_edges()).to(device)
+        trainval_div-new_node_eid_delete.size(0), graph_new_node.num_edges())
 
-    g_sampling = None if args.fast_mode else dgl.add_reverse_edges(
-        graph_no_new_node, copy_edata=True)
-    new_node_g_sampling = None if args.fast_mode else dgl.add_reverse_edges(
-        graph_new_node, copy_edata=True)
+    # ToDo: if need add_reverse_edges?
+    # g_sampling = None if args.fast_mode else dgl.add_reverse_edges(
+    #     graph_no_new_node, copy_edata=True)
+    # new_node_g_sampling = None if args.fast_mode else dgl.add_reverse_edges(
+    #     graph_new_node, copy_edata=True)
+    g_sampling = None if args.fast_mode else graph_no_new_node
+    new_node_g_sampling = None if args.fast_mode else graph_new_node
     if not args.fast_mode:
         new_node_g_sampling.ndata[dgl.NID] = new_node_g_sampling.nodes()
         g_sampling.ndata[dgl.NID] = new_node_g_sampling.nodes()
 
     # we highly recommend that you always set the num_workers=0, otherwise the sampled subgraph may not be correct.
+    print("g_sampling:", g_sampling)
+    print("new_node_g_sampling:", g_sampling)
     train_dataloader = TemporalEdgeDataLoader(graph_no_new_node,
                                               train_seed,
                                               sampler,
-                                              device_str,
+                                            #   device_str,
                                               batch_size=args.batch_size,
                                               negative_sampler=neg_sampler,
                                               shuffle=False,
@@ -230,7 +256,7 @@ if __name__ == "__main__":
     valid_dataloader = TemporalEdgeDataLoader(graph_no_new_node,
                                               valid_seed,
                                               sampler,
-                                              device_str,
+                                            #   device_str,
                                               batch_size=args.batch_size,
                                               negative_sampler=neg_sampler,
                                               shuffle=False,
@@ -242,7 +268,7 @@ if __name__ == "__main__":
     test_dataloader = TemporalEdgeDataLoader(graph_no_new_node,
                                              test_seed,
                                              sampler,
-                                             device_str,
+                                            #  device_str,
                                              batch_size=args.batch_size,
                                              negative_sampler=neg_sampler,
                                              shuffle=False,
@@ -254,7 +280,7 @@ if __name__ == "__main__":
     test_new_node_dataloader = TemporalEdgeDataLoader(graph_new_node,
                                                       test_new_node_seed,
                                                       new_node_sampler if args.fast_mode else sampler,
-                                                      device_str,
+                                                    #   device_str,
                                                       batch_size=args.batch_size,
                                                       negative_sampler=neg_sampler,
                                                       shuffle=False,
@@ -265,6 +291,15 @@ if __name__ == "__main__":
 
     edge_dim = data.edata['feats'].shape[1]
     num_node = data.num_nodes()
+
+    print("edge_dim:", edge_dim)
+    print("memory_dim:", args.memory_dim)
+    print("temporal_dim:", args.temporal_dim)
+    print("embedding_dim:", args.embedding_dim)
+    print("num_heads:", args.num_heads)
+    print("num_nodes:", num_nodes)
+    print("n_neighbors:", args.n_neighbors)
+    print("memory_updater:", args.memory_updater)
 
     model = TGN(edge_feat_dim=edge_dim,
                 memory_dim=args.memory_dim,

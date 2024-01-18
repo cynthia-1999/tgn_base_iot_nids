@@ -130,7 +130,6 @@ class TimeEncode(nn.Module):
         super(TimeEncode, self).__init__()
 
         self.dimension = dimension
-        # 初始化一个线性层，该层将一个标量输入映射到一组特征向量。这个线性层的权重和偏差参数是通过傅里叶级数的方式初始化的，以便捕获不同频率的时间信号。
         self.w = torch.nn.Linear(1, dimension)
         self.w.weight = torch.nn.Parameter((torch.from_numpy(1 / 10 ** np.linspace(0, 9, dimension)))
                                            .double().reshape(dimension, -1))
@@ -141,8 +140,6 @@ class TimeEncode(nn.Module):
         output = torch.cos(self.w(t))
         return output
 
-# 一个用于存储和更新节点记忆的PyTorch模块。它的作用是为图中的每个节点维护一个记忆向量，可以在时间上更新这些记忆
-# 可以帮助模型在处理时间序列数据时捕获节点的历史信息，以便更好地理解时间相关性。
 class MemoryModule(nn.Module):
     """Memory module as well as update interface
 
@@ -279,14 +276,18 @@ class MemoryOperation(nn.Module):
         g.ndata['timestamp'] = self.memory.last_update_t[g.ndata[dgl.NID]]
         g.ndata['memory'] = self.memory.memory[g.ndata[dgl.NID]]
 
+    # 讲道理源节点和目标节点都要更新，因此应该使用双向图
     def msg_fn_cat(self, edges):
         src_delta_time = edges.data['timestamp'] - edges.src['timestamp']
         time_encode = self.temporal_encoder(src_delta_time.unsqueeze(
             dim=1)).view(len(edges.data['timestamp']), -1)
+        # ToDo：使用其他消息函数
         ret = torch.cat([edges.src['memory'], edges.dst['memory'],
                          edges.data['feats'], time_encode], dim=1)
         return {'message': ret, 'timestamp': edges.data['timestamp']}
 
+    # ToDo：使用其他聚合函数（RNN、Attention）
+    # 这里使用的是最新消息，也可以采用平均消息
     def agg_last(self, nodes):
         timestamp, latest_idx = torch.max(nodes.mailbox['timestamp'], dim=1)
         ret = nodes.mailbox['message'].gather(1, latest_idx.repeat(
@@ -379,6 +380,7 @@ class EdgeGATConv(nn.Module):
         self.feat_drop = nn.Dropout(feat_drop)
         self.attn_drop = nn.Dropout(attn_drop)
         self.leaky_relu = nn.LeakyReLU(negative_slope)
+        # 配置残差连接，并根据输入和输出特征的维度选择是否添加线性变换层
         self.residual = residual
         if residual:
             if self._node_feats != self._out_feats:
@@ -400,11 +402,12 @@ class EdgeGATConv(nn.Module):
         if self.residual and isinstance(self.res_fc, nn.Linear):
             nn.init.xavier_normal_(self.res_fc.weight, gain=gain)
 
-    # 用于计算消息。根据边的权重和边特征，计算消息并返回
+    # message function
     def msg_fn(self, edges):
         ret = edges.data['a'].view(-1, self._num_heads,
                                    1)*edges.data['el_prime']
         return {'m': ret}
+
 
     def forward(self, graph, nfeat, efeat, get_attention=False):
         with graph.local_scope():
@@ -435,6 +438,7 @@ class EdgeGATConv(nn.Module):
             graph.ndata['el'] = el
             graph.ndata['er'] = er
             graph.edata['ee'] = ee
+            # el？ src or dst？
             graph.apply_edges(fn.u_add_e('el', 'ee', 'el_prime'))
             graph.apply_edges(fn.e_add_v('el_prime', 'er', 'e'))
             e = self.leaky_relu(graph.edata['e'])
@@ -476,7 +480,10 @@ class TemporalEdgePreprocess(nn.Module):
 
     def edge_fn(self, edges):
         t0 = torch.zeros_like(edges.dst['timestamp'])
+        print("edges.data['timestamp']:", edges.data['timestamp'])
+        print("edges.src['timestamp']:", edges.src['timestamp'])
         time_diff = edges.data['timestamp'] - edges.src['timestamp']
+        print("time_diff:", time_diff)
         time_encode = self.temporal_encoder(
             time_diff.unsqueeze(dim=1)).view(t0.shape[0], -1)
         edge_feat = torch.cat([edges.data['feats'], time_encode], dim=1)
@@ -487,7 +494,6 @@ class TemporalEdgePreprocess(nn.Module):
         efeat = graph.edata['efeat']
         return efeat
 
-# 用于时序图数据的时变卷积网络，用于处理包含时间信息的图数据
 class TemporalTransformerConv(nn.Module):
     def __init__(self,
                  edge_feats,
@@ -556,8 +562,9 @@ class TemporalTransformerConv(nn.Module):
     def forward(self, graph, memory, ts):
         graph = graph.local_var()
         graph.ndata['timestamp'] = ts
-        efeat = self.preprocessor(graph).float()
-        rst = memory
+        efeat = self.preprocessor(graph).float() # temporal node features vj (t).
+        rst = memory # current memory sj(t)
+        # 第i层的输入：它由节点在(i-1)层的表示、当前时间戳、邻域节点在各个时间戳的表示，以及每个形成节点的时序邻域边缘的交互特征组成。
         for i in range(self.layers-1):
             rst = self.layer_list[i](graph, rst, efeat).flatten(1)
         rst = self.layer_list[-1](graph, rst, efeat).mean(1)

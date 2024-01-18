@@ -32,7 +32,6 @@ class TGN(nn.Module):
 
         self.memory = MemoryModule(self.num_nodes,
                                    self.memory_dim).to(device)
-        print("self.memory.memory.device:", self.memory.memory.device)
 
         self.memory_ops = MemoryOperation(self.memory_updater_type,
                                           self.memory,
@@ -69,18 +68,14 @@ class TGN(nn.Module):
     #     return pred_pos, pred_neg
     def embed(self, graph, blocks):
         emb_graph = blocks[0]
-        print("self.memory.memory.device: ", self.memory.memory.device)
-        print("emb_graph.device: ", emb_graph.device)
         emb_memory = self.memory.memory[emb_graph.ndata[dgl.NID], :]
         emb_t = emb_graph.ndata['timestamp']
-        # 过Temporal Transformer捕捉节点的时序特征
         embedding = self.embedding_attn(emb_graph, emb_memory, emb_t)
         emb2pred = dict(
             zip(emb_graph.ndata[dgl.NID].tolist(), emb_graph.nodes().tolist()))
         # Since postive graph and negative graph has same is mapping
         feat_id = [emb2pred[int(n)] for n in graph.ndata[dgl.NID]]
         feat = embedding[feat_id]
-        # 用MsgLinkPredictor预测节点连接的概率
         mal_pred = self.msg_malpredictor(
             feat, graph)
         return mal_pred
