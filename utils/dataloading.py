@@ -78,13 +78,14 @@ class TemporalSampler(BlockSampler):
             zip(temp2origin.tolist(), temporal_subgraph.nodes().tolist()))
         temporal_subgraph.ndata[dgl.NID] = g.ndata[dgl.NID][temp2origin]
         seed_nodes = [root2sub_dict[int(n)] for n in seed_nodes]
-        device = g.device
-        cpu_temporal_subgraph = temporal_subgraph.to(torch.device('cpu'))
+        # device = g.device
+        # cpu_temporal_subgraph = temporal_subgraph.to(torch.device('cpu'))
         # cpu_seed_nodes = seed_nodes.to(torch.device('cpu'))
-        final_subgraph = self.sampler(g=cpu_temporal_subgraph, nodes=seed_nodes)
+        # final_subgraph = self.sampler(g=cpu_temporal_subgraph, nodes=seed_nodes)
+        final_subgraph = self.sampler(g=temporal_subgraph, nodes=seed_nodes)
         final_subgraph.remove_self_loop()
-        return final_subgraph.to(device)
-
+        # return final_subgraph.to(device)
+        return final_subgraph
         # Temporal Subgraph
         
     
@@ -261,7 +262,8 @@ class TemporalEdgeCollator(EdgeCollator):
             nodes_id.append(subg.srcdata[dgl.NID])
             batch_graphs.append(subg)
         blocks = [dgl.batch(batch_graphs)]
-        input_nodes = torch.cat(nodes_id).to(self.device)
+        # input_nodes = torch.cat(nodes_id).to(self.device)
+        input_nodes = torch.cat(nodes_id)
         return input_nodes, pair_graph, blocks
 
     # 将边ID列表转换为一个数据块，并在其中执行一些操作，以准备好用于图神经网络的训练或评估。这些操作包括移除与输入图和采样图相关的子图存储，可能是为了减少内存占用和优化性能。

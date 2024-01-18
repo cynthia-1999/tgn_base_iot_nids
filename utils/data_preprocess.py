@@ -92,7 +92,7 @@ def run(data_name, bipartite=True):
 
 def my_preprocess(data_path, data_name):
     data = pd.read_csv(data_path)
-    data = data.head(500)
+    # data = data.head(500)
     if data_name == "BoT-IoT":
         data.drop(columns=['pkSeqID', 'flgs', 'proto', 'state', 'seq', 'category', 'subcategory',],inplace=True)
     data['saddr'] = data.saddr.apply(str)
