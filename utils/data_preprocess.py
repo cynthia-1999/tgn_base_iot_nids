@@ -92,7 +92,7 @@ def run(data_name, bipartite=True):
 
 def my_preprocess(data_path, data_name):
     data = pd.read_csv(data_path)
-    # data = data.head(500)
+    data = data.head(337044)
     if data_name == "BoT-IoT":
         data.drop(columns=['pkSeqID', 'flgs', 'proto', 'state', 'seq', 'category', 'subcategory',],inplace=True)
     data['saddr'] = data.saddr.apply(str)
@@ -118,7 +118,6 @@ def my_preprocess(data_path, data_name):
     label_ground_truth = data[["saddr", "daddr","label"]]
     
     data = move_column_to_position_in_data(data, 'stime', 3)
-    print("data.columns:", data.columns)
     
     scaler = StandardScaler()
     cols_to_norm = list(set(list(data.iloc[:, 4:].columns )) - set(list(['label'])))
@@ -131,10 +130,6 @@ def my_preprocess(data_path, data_name):
     # move_column_to_position_in_data(data, 'daddr', 1)
     # move_column_to_position_in_data(data, 'stime', 2)
     # move_column_to_position_in_data(data, 'label', 3)
-    
-    
-    print("data.columns:", data.columns)
-
     
     u_list, i_list, ts_list, label_list = [], [], [], []
     feat_l = []

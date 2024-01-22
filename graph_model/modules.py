@@ -480,10 +480,7 @@ class TemporalEdgePreprocess(nn.Module):
 
     def edge_fn(self, edges):
         t0 = torch.zeros_like(edges.dst['timestamp'])
-        print("edges.data['timestamp']:", edges.data['timestamp'])
-        print("edges.src['timestamp']:", edges.src['timestamp'])
         time_diff = edges.data['timestamp'] - edges.src['timestamp']
-        print("time_diff:", time_diff)
         time_encode = self.temporal_encoder(
             time_diff.unsqueeze(dim=1)).view(t0.shape[0], -1)
         edge_feat = torch.cat([edges.data['feats'], time_encode], dim=1)

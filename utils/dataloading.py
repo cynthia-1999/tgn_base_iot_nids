@@ -9,7 +9,37 @@ from dgl.base import DGLError
 from functools import partial
 import copy
 import dgl.function as fn
+import numpy as np
 
+def print_all_nodes(g):
+    all_nodes = g.nodes()
+    for node in all_nodes:
+        print(node)
+
+def print_all_edges(g):
+    all_edges = g.edges()
+    for i, edge in enumerate(zip(all_edges[0], all_edges[1])):
+    # for src, dst in all_edges:
+        print(f"Edge from Node {edge[0]} to Node {edge[1]}")
+
+def print_selected_edges(g, selected_indices):
+    all_edges = g.edges()
+    srcs = all_edges[0]
+    dsts = all_edges[1]
+    # edges = [(src, dst) for src, dst in all_edges] 
+    for index in selected_indices:
+        print(f"Edge[{index}]: ({srcs[index]}, {dsts[index]})")
+
+def count_edges(g, seed_nodes):
+    count = 0
+    all_edges = g.edges()
+    for i, edge in enumerate(zip(all_edges[0], all_edges[1])):
+    # for src, dst in all_edges:
+        if edge[0] == seed_nodes[0] or edge[0] == seed_nodes[1] or edge[0] == seed_nodes[1] or edge[1] == seed_nodes[1]:
+            count = count+1
+    return count
+
+        
 
 def _prepare_tensor(g, data, name, is_distributed):
     return torch.tensor(data) if is_distributed else dgl.utils.prepare_tensor(g, data, name)
@@ -54,23 +84,38 @@ class TemporalSampler(BlockSampler):
             raise DGLError(
                 "Sampler string invalid please use \'topk\' or \'uniform\'")
 
-    # 对给定的种子节点进行采样，并考虑时间戳
+    # ToDo: 修改采样策略，使得一个batch的graph不能包含太多的节点，需要确定这个阈值
     def sampler_frontier(self,
                          block_id,
                          g,
                          seed_nodes,
+                         current_edge_index,
                          timestamp):
+        # ToDo：src和dst要单独进行采样
         full_neighbor_subgraph = dgl.in_subgraph(g, seed_nodes)
         full_neighbor_subgraph = dgl.add_edges(full_neighbor_subgraph,
                                                seed_nodes, seed_nodes)
 
-        temporal_edge_mask = (full_neighbor_subgraph.edata['timestamp'] < timestamp) + (
-            full_neighbor_subgraph.edata['timestamp'] <= 0)
-        temporal_subgraph = dgl.edge_subgraph(
-            full_neighbor_subgraph, temporal_edge_mask)
+        selected_edges = full_neighbor_subgraph.edata[dgl.EID]
 
+        # temporal_edge_mask = (full_neighbor_subgraph.edata['timestamp'] < timestamp) + (
+        #     full_neighbor_subgraph.edata['timestamp'] <= 0)
+        temporal_edge_mask = (full_neighbor_subgraph.edata['timestamp'] < timestamp)
+        true_indices = np.where(temporal_edge_mask)[0]
+
+        if len(true_indices) > 100:
+            # print("sampled edges > 100")
+            selected_indices = np.random.choice(true_indices, 100, replace=False)
+            temporal_edge_mask = np.zeros_like(temporal_edge_mask, dtype=bool)
+            temporal_edge_mask[selected_indices] = True
+            temporal_edge_mask = torch.from_numpy(temporal_edge_mask)
+        
+        selected_edges = selected_edges[temporal_edge_mask]
+        selected_edges = torch.cat((selected_edges, torch.tensor([current_edge_index])), dim=0)
+
+        # temporal_subgraph = dgl.edge_subgraph(full_neighbor_subgraph, temporal_edge_mask)
+        temporal_subgraph = dgl.edge_subgraph(g, selected_edges)
         # Map preserve ID
-        # 对temporal_subgraph中的节点ID进行映射，以保持ID的一致性
         temp2origin = temporal_subgraph.ndata[dgl.NID]
 
         # The added new edgge will be preserved hence
@@ -78,13 +123,8 @@ class TemporalSampler(BlockSampler):
             zip(temp2origin.tolist(), temporal_subgraph.nodes().tolist()))
         temporal_subgraph.ndata[dgl.NID] = g.ndata[dgl.NID][temp2origin]
         seed_nodes = [root2sub_dict[int(n)] for n in seed_nodes]
-        # device = g.device
-        # cpu_temporal_subgraph = temporal_subgraph.to(torch.device('cpu'))
-        # cpu_seed_nodes = seed_nodes.to(torch.device('cpu'))
-        # final_subgraph = self.sampler(g=cpu_temporal_subgraph, nodes=seed_nodes)
         final_subgraph = self.sampler(g=temporal_subgraph, nodes=seed_nodes)
         final_subgraph.remove_self_loop()
-        # return final_subgraph.to(device)
         return final_subgraph
         # Temporal Subgraph
         
@@ -93,9 +133,10 @@ class TemporalSampler(BlockSampler):
     def sample_blocks(self,
                       g,
                       seed_nodes,
+                      current_edge_index,
                       timestamp):
         blocks = []
-        frontier = self.sampler_frontier(0, g, seed_nodes, timestamp)
+        frontier = self.sampler_frontier(0, g, seed_nodes, current_edge_index, timestamp)
         #block = transform.to_block(frontier,seed_nodes)
         block = frontier
         if self.return_eids:
@@ -257,6 +298,7 @@ class TemporalEdgeCollator(EdgeCollator):
             ts = pair_graph.edata['timestamp'][i]
             subg = self.graph_sampler.sample_blocks(self.g_sampling,
                                                     list(edge),
+                                                    items[i].item(),
                                                     timestamp=ts)[0]
             subg.ndata['timestamp'] = ts.repeat(subg.num_nodes())
             nodes_id.append(subg.srcdata[dgl.NID])

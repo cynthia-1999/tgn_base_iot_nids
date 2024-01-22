@@ -72,15 +72,15 @@ def move_column_to_position(input_csv, target_column_name, target_column_positio
 
 
 if __name__ == "__main__":
-    folder_path = '/root/zc/tgn_base_iot_nids/datasets/BoT-IoT'
-    file = '/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/BoT-IoT.csv'
+    folder_path = '/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/zips'
+    file = '/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/zips/BoT-IoT.csv'
     # move_column_to_position(file, 'saddr', 1, file)
     # move_column_to_position(file, 'sport', 2, file)
     # move_column_to_position(file, 'daddr', 3, file)
     # move_column_to_position(file, 'dport', 4, file)
     # move_column_to_position(file, 'stime', 5, file)
     # move_column_to_position(file, 'attack', 6, file)
-    data = pd.read_csv(file)
-    move_column_to_position_in_data(data, 'saddr', 1)
-    # merge_table(folder_path, file)
+    # data = pd.read_csv(file)
+    # move_column_to_position_in_data(data, 'saddr', 1)
+    merge_table(folder_path, file)
     

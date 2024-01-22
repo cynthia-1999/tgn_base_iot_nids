@@ -4,16 +4,18 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-ipykernel = "*"
+torch = "*"
 scikit-learn = "*"
 pandas = "*"
-torch = "*"
+ipykernel = "*"
+pyyaml = "*"
+torch-scatter = {file = "torch_scatter-2.1.2+pt21cu121-cp38-cp38-linux_x86_64.whl"}
+torch-cluster = {file = "torch_cluster-1.6.3+pt21cu121-cp38-cp38-linux_x86_64.whl"}
+torch-sparse = {file = "torch_sparse-0.6.18+pt21cu121-cp38-cp38-linux_x86_64.whl"}
+torch-spline-conv = {file = "torch_spline_conv-1.2.2+pt21cu121-cp38-cp38-linux_x86_64.whl"}
 dgl-cu113 = {file = "dgl_cu113-0.9.1-cp38-cp38-manylinux1_x86_64.whl"}
 
 [dev-packages]
 
 [requires]
 python_version = "3.8"
-
-[pipenv]
-allow_prereleases = true

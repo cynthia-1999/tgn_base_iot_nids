@@ -33,7 +33,6 @@ def train(model, dataloader, sampler, criterion, optimizer, args, device):
     for _, positive_pair_g, blocks in dataloader:
         positive_pair_g = positive_pair_g.to(device)
         # ToDo：使用图对比学习
-        # negative_pair_g = negative_pair_g.to(device)
         blocks[0] = blocks[0].to(device)
         optimizer.zero_grad()
         pred_pos = model.embed(positive_pair_g, blocks)
@@ -82,14 +81,13 @@ def test_val(model, dataloader, sampler, criterion, args, device):
             batch_cnt += 1
     return float(torch.tensor(aps).mean()), float(torch.tensor(aucs).mean())
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--epochs", type=int, default=1,
                         help='epochs for training on entire dataset')
     parser.add_argument("--device_id", type=int,
-                        default=1, help="gpu device id")
+                        default=3, help="gpu device id")
     parser.add_argument("--batch_size", type=int,
                         default=50, help="Size of each batch")
     parser.add_argument("--embedding_dim", type=int, default=100,
@@ -240,7 +238,7 @@ if __name__ == "__main__":
 
     # we highly recommend that you always set the num_workers=0, otherwise the sampled subgraph may not be correct.
     print("g_sampling:", g_sampling)
-    print("new_node_g_sampling:", g_sampling)
+    print("new_node_g_sampling:", new_node_g_sampling)
     train_dataloader = TemporalEdgeDataLoader(graph_no_new_node,
                                               train_seed,
                                               sampler,
