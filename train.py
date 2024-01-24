@@ -14,30 +14,54 @@ from utils.dataloading import (FastTemporalEdgeCollator, FastTemporalSampler,
                          TemporalEdgeDataLoader, TemporalSampler, TemporalEdgeCollator)
 
 from sklearn.metrics import average_precision_score, roc_auc_score
-
+from contrast import drop_feature, ContrastModule
 
 TRAIN_SPLIT = 0.7
 VALID_SPLIT = 0.85
+
+DROP_FEATURE_RATE_1 = 0.3
+DROP_FEATURE_RATE_2 = 0.2
 
 # set random Seed
 np.random.seed(2021)
 torch.manual_seed(2021)
 
+def my_clone_graph(g, device):
+    g_copy = copy.deepcopy(g)
+    # g_copy.ndata[dgl.NID] = g.ndata[dgl.NID]
+    g_copy.ndata[dgl.NID] = g.nodes()
+    # g_copy.edata[dgl.EID] = g.edges()
+    return g_copy
 
-def train(model, dataloader, sampler, criterion, optimizer, args, device):
+def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, device):
     model.train()
     total_loss = 0
     batch_cnt = 0
     last_t = time.time()
-    # for _, positive_pair_g, negative_pair_g, blocks in dataloader:
     for _, positive_pair_g, blocks in dataloader:
         positive_pair_g = positive_pair_g.to(device)
-        # ToDo：使用图对比学习
         blocks[0] = blocks[0].to(device)
+
         optimizer.zero_grad()
-        pred_pos = model.embed(positive_pair_g, blocks)
+        # 对比学习
+        g_feature = positive_pair_g.edata['feats']
+        g_feature_1 = drop_feature(g_feature, DROP_FEATURE_RATE_1)
+        g_feature_2 = drop_feature(g_feature, DROP_FEATURE_RATE_2)
+
+        positive_pair_g.edata['feats'] = g_feature_1
+        z1 = model.embed(positive_pair_g, blocks)
+        positive_pair_g.edata['feats'] = g_feature_2
+        z2 = model.embed(positive_pair_g, blocks)
+
+        loss = contrast_op.loss(z1, z2, batch_size=0)
+ 
+        positive_pair_g.edata['feats'] = g_feature
+
+        # predict
+        embeddings = model.embed(positive_pair_g, blocks)
+        predictions = model.predict(positive_pair_g, embeddings)
         labels = positive_pair_g.edata['label'].unsqueeze(1)
-        loss = criterion(pred_pos, labels)
+        loss += criterion(predictions, labels)
         # loss += criterion(pred_neg, torch.zeros_like(pred_neg))
         total_loss += float(loss)*args.batch_size
         retain_graph = True if batch_cnt == 0 and not args.fast_mode else False
@@ -92,6 +116,8 @@ if __name__ == "__main__":
                         default=50, help="Size of each batch")
     parser.add_argument("--embedding_dim", type=int, default=100,
                         help="Embedding dim for link prediction")
+    parser.add_argument("--proj_dim", type=int, default=100,
+                        help="project dim for Contrast")
     parser.add_argument("--memory_dim", type=int, default=100,
                         help="dimension of memory")
     parser.add_argument("--temporal_dim", type=int, default=100,
@@ -144,8 +170,9 @@ if __name__ == "__main__":
     num_nodes = data.num_nodes()
     num_edges = data.num_edges()
 
-    num_edges = data.num_edges()
+    print("num_nodes:", num_nodes)
     print("num_edges:", num_edges)
+
     trainval_div = int(VALID_SPLIT*num_edges)
     print("trainval_div:", trainval_div)
 
@@ -294,6 +321,7 @@ if __name__ == "__main__":
     print("memory_dim:", args.memory_dim)
     print("temporal_dim:", args.temporal_dim)
     print("embedding_dim:", args.embedding_dim)
+    print("proj_dim:", args.proj_dim)
     print("num_heads:", args.num_heads)
     print("num_nodes:", num_nodes)
     print("n_neighbors:", args.n_neighbors)
@@ -308,7 +336,8 @@ if __name__ == "__main__":
                 n_neighbors=args.n_neighbors,
                 memory_updater_type=args.memory_updater,
                 layers=args.k_hop, device=device).to(device)
-
+    
+    contrast_op = ContrastModule(args.embedding_dim, args.proj_dim).to(device)
     criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     # Implement Logging mechanism
@@ -318,7 +347,7 @@ if __name__ == "__main__":
     try:
         for i in range(args.epochs):
             print("epoch ", i)
-            train_loss = train(model, train_dataloader, sampler, 
+            train_loss = train(model, contrast_op, train_dataloader, sampler, 
                                criterion, optimizer, args, device)
             val_ap, val_auc = test_val(
                 model, valid_dataloader, sampler, criterion, args, device)

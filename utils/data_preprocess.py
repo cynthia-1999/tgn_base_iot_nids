@@ -92,9 +92,10 @@ def run(data_name, bipartite=True):
 
 def my_preprocess(data_path, data_name):
     data = pd.read_csv(data_path)
-    data = data.head(337044)
+    # data = data.head(337044)
     if data_name == "BoT-IoT":
-        data.drop(columns=['pkSeqID', 'flgs', 'proto', 'state', 'seq', 'category', 'subcategory',],inplace=True)
+        # print("data.columns:", data.columns)
+        data.drop(columns=['pkSeqID', 'flgs', 'proto', 'state', 'seq', 'category', 'subcategory ',],inplace=True)
     data['saddr'] = data.saddr.apply(str)
     data['sport'] = data.sport.apply(str)
     data['daddr'] = data.daddr.apply(str)
@@ -110,7 +111,7 @@ def my_preprocess(data_path, data_name):
     # move_column_to_position_in_data(data, 'daddr', 2)
     
     label_ground_truth = data[["saddr", "daddr","label"]]
-    data = pd.get_dummies(data, columns = ['flgs_number','state_number', 'proto_number'])
+    # data = pd.get_dummies(data, columns = ['flgs_number','state_number', 'proto_number'])
     data = data.reset_index()
     data.replace([np.inf, -np.inf], np.nan,inplace = True)
     data.fillna(0,inplace = True)
