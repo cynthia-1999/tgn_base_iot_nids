@@ -92,26 +92,30 @@ class TemporalSampler(BlockSampler):
                          current_edge_index,
                          timestamp):
         # ToDo：src和dst要单独进行采样
-        full_neighbor_subgraph = dgl.in_subgraph(g, seed_nodes)
-        full_neighbor_subgraph = dgl.add_edges(full_neighbor_subgraph,
-                                               seed_nodes, seed_nodes)
 
-        selected_edges = full_neighbor_subgraph.edata[dgl.EID]
+        selected_edges = torch.empty(0, dtype=torch.int64)
+        for seed_node in seed_nodes:
+            full_neighbor_subgraph = dgl.in_subgraph(g, seed_node)
+            # full_neighbor_subgraph = dgl.add_edges(full_neighbor_subgraph,
+            #                                     seed_nodes, seed_nodes)
+            current_selected_edges = full_neighbor_subgraph.edata[dgl.EID]
 
-        # temporal_edge_mask = (full_neighbor_subgraph.edata['timestamp'] < timestamp) + (
-        #     full_neighbor_subgraph.edata['timestamp'] <= 0)
-        temporal_edge_mask = (full_neighbor_subgraph.edata['timestamp'] < timestamp)
-        true_indices = np.where(temporal_edge_mask)[0]
+            temporal_edge_mask = (full_neighbor_subgraph.edata['timestamp'] < timestamp) + (
+                full_neighbor_subgraph.edata['timestamp'] <= 0)
+            true_indices = np.where(temporal_edge_mask)[0]
 
-        if len(true_indices) > 100:
-            # print("sampled edges > 100")
-            selected_indices = np.random.choice(true_indices, 100, replace=False)
-            temporal_edge_mask = np.zeros_like(temporal_edge_mask, dtype=bool)
-            temporal_edge_mask[selected_indices] = True
-            temporal_edge_mask = torch.from_numpy(temporal_edge_mask)
-        
-        selected_edges = selected_edges[temporal_edge_mask]
+            if len(true_indices) > 100:
+                # print("sampled edges > 100")
+                selected_indices = np.random.choice(true_indices, 100, replace=False)
+                temporal_edge_mask = np.zeros_like(temporal_edge_mask, dtype=bool)
+                temporal_edge_mask[selected_indices] = True
+                temporal_edge_mask = torch.from_numpy(temporal_edge_mask)
+            
+            current_selected_edges = current_selected_edges[temporal_edge_mask]
+            selected_edges = torch.cat((selected_edges, current_selected_edges), dim=0)
+
         selected_edges = torch.cat((selected_edges, torch.tensor([current_edge_index])), dim=0)
+        # selected_edges = torch.tensor([current_edge_index])
 
         # temporal_subgraph = dgl.edge_subgraph(full_neighbor_subgraph, temporal_edge_mask)
         temporal_subgraph = dgl.edge_subgraph(g, selected_edges)
@@ -123,8 +127,10 @@ class TemporalSampler(BlockSampler):
             zip(temp2origin.tolist(), temporal_subgraph.nodes().tolist()))
         temporal_subgraph.ndata[dgl.NID] = g.ndata[dgl.NID][temp2origin]
         seed_nodes = [root2sub_dict[int(n)] for n in seed_nodes]
+        print("temporal_subgraph:", temporal_subgraph)
         final_subgraph = self.sampler(g=temporal_subgraph, nodes=seed_nodes)
         final_subgraph.remove_self_loop()
+        print("final_subgraph:", final_subgraph)
         return final_subgraph
         # Temporal Subgraph
         
@@ -293,7 +299,6 @@ class TemporalEdgeCollator(EdgeCollator):
         batch_graphs = []
         nodes_id = []
 
-        # 根据 items 中的每条边，使用邻居采样器 graph_sampler 对时间子图进行采样，并将采样得到的子图添加到 batch_graphs 列表中。
         for i, edge in enumerate(zip(self.g.edges()[0][items], self.g.edges()[1][items])):
             ts = pair_graph.edata['timestamp'][i]
             subg = self.graph_sampler.sample_blocks(self.g_sampling,
@@ -304,6 +309,7 @@ class TemporalEdgeCollator(EdgeCollator):
             nodes_id.append(subg.srcdata[dgl.NID])
             batch_graphs.append(subg)
         blocks = [dgl.batch(batch_graphs)]
+        print("blocks:", blocks)
         # input_nodes = torch.cat(nodes_id).to(self.device)
         input_nodes = torch.cat(nodes_id)
         return input_nodes, pair_graph, blocks
