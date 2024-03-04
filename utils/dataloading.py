@@ -127,10 +127,10 @@ class TemporalSampler(BlockSampler):
             zip(temp2origin.tolist(), temporal_subgraph.nodes().tolist()))
         temporal_subgraph.ndata[dgl.NID] = g.ndata[dgl.NID][temp2origin]
         seed_nodes = [root2sub_dict[int(n)] for n in seed_nodes]
-        print("temporal_subgraph:", temporal_subgraph)
+        # print("temporal_subgraph:", temporal_subgraph)
         final_subgraph = self.sampler(g=temporal_subgraph, nodes=seed_nodes)
         final_subgraph.remove_self_loop()
-        print("final_subgraph:", final_subgraph)
+        # print("final_subgraph:", final_subgraph)
         return final_subgraph
         # Temporal Subgraph
         
