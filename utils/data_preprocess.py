@@ -94,18 +94,21 @@ def run(data_name, bipartite=True):
 def my_preprocess(data_path, data_name, multi_class):
     data = pd.read_csv(data_path)
     data = data.head(4000000)
-    data.drop(columns=['pkSeqID', 'flgs', 'proto', 'state', 'seq', 'subcategory',],inplace=True)
+    data.drop(columns=['pkSeqID', 'flgs', 'proto', 'state', 'seq', 'subcategory'],inplace=True)
 
     if multi_class:
-        data.drop(columns=['attack'])
+        data.drop(columns=['attack'],inplace=True)
         data.rename(columns={"category": "label"},inplace = True)
         print(data.label.value_counts())
         le = LabelEncoder()
         le.fit_transform(data.label.values)
         data['label'] = le.transform(data['label'])
     else:
-        data.drop(columns=['category'])
+        print("test")
+        data.drop(columns=['category'],inplace=True)
         data.rename(columns={"attack": "label"},inplace = True)
+    
+    print("data.columns:", data.columns)
     data['saddr'] = data.saddr.apply(str)
     data['sport'] = data.sport.apply(str)
     data['daddr'] = data.daddr.apply(str)
@@ -181,14 +184,14 @@ def ton_preprocess(data_path, data_name, multi_class):
     data.drop(columns=['src_port','dst_port','http_uri', 'http_referrer', 'weird_name','weird_addl','weird_notice','dns_query','ssl_subject','ssl_issuer','http_user_agent'],inplace=True)
     
     if multi_class:
-        data.drop(columns=['label'])
+        data.drop(columns=['label'],inplace=True)
         data.rename(columns={"type": "label"},inplace = True)
         print(data.label.value_counts())
         le = LabelEncoder()
         le.fit_transform(data.label.values)
         data['label'] = le.transform(data['label'])
     else:
-        data.drop(columns=['type'])
+        data.drop(columns=['type'],inplace=True)
     
     data['label'] = data.label.apply(int)
 
@@ -244,7 +247,7 @@ def my_run(folder, dataset, file_name, multi_class, bipartite=True):
     OUT_FEAT = folder + '/ml_{}.npy'.format(file_name)
 
     if dataset == "BoT-IoT":
-        df,   = my_preprocess(PATH, dataset, multi_class)
+        df, feat = my_preprocess(PATH, dataset, multi_class)
     elif dataset == "ToN-IoT":
         df, feat = ton_preprocess(PATH, dataset, multi_class)
     # new_df = reindex(df, bipartite)
@@ -308,7 +311,7 @@ def MyTemporalDataset(dataset, multi_class):
             raw_connection['ts'].to_numpy())
         g.edata['label'] = torch.from_numpy(raw_connection['label'].to_numpy())
         g.edata['feats'] = torch.from_numpy(raw_feature[1:, :]).float()
-        dgl.save_graphs(datapath + '/{}.bin'.format(dataset), [g])
+        dgl.save_graphs(datapath + '/{}.bin'.format(file_name), [g])
     else:
         print("Data is exist directly loaded.")
         gs, _ = dgl.load_graphs(datapath + '/{}.bin'.format(file_name))

@@ -2,13 +2,15 @@ import argparse
 import traceback
 import time
 import copy
+from pathlib import Path
+import os
 
 import numpy as np
 import dgl
 import torch
 
 from tgn import TGN
-from utils.data_preprocess import TemporalWikipediaDataset, TemporalRedditDataset, TemporalDataset, TemporalBotiotDataset
+from utils.data_preprocess import TemporalWikipediaDataset, TemporalRedditDataset, TemporalDataset, TemporalBotiotDataset, TemporalToniotDataset
 from utils.dataloading import (FastTemporalEdgeCollator, FastTemporalSampler,
                          SimpleTemporalEdgeCollator, SimpleTemporalSampler,
                          TemporalEdgeDataLoader, TemporalSampler, TemporalEdgeCollator)
@@ -21,6 +23,11 @@ VALID_SPLIT = 0.85
 
 DROP_FEATURE_RATE_1 = 0.3
 DROP_FEATURE_RATE_2 = 0.2
+
+
+now = time.time()
+timeArray = time.localtime(now)
+styleTime = time.strftime("%Y-%m-%d-%H:%M:%S", timeArray)
 
 # set random Seed
 np.random.seed(2021)
@@ -44,6 +51,7 @@ def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, d
 
         optimizer.zero_grad()
         # 对比学习
+        # ToDo: 尝试不同的对比目标
         g_feature = positive_pair_g.edata['feats']
         g_feature_1 = drop_feature(g_feature, DROP_FEATURE_RATE_1)
         g_feature_2 = drop_feature(g_feature, DROP_FEATURE_RATE_2)
@@ -78,7 +86,6 @@ def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, d
         batch_cnt += 1
     return total_loss
 
-
 def test_val(model, dataloader, sampler, criterion, args, device):
     model.eval()
     batch_size = args.batch_size
@@ -90,11 +97,13 @@ def test_val(model, dataloader, sampler, criterion, args, device):
         for _, positive_pair_g, blocks in dataloader:
             positive_pair_g = positive_pair_g.to(device) 
             blocks[0] = blocks[0].to(device)
-            pred_pos = model.embed(positive_pair_g, blocks)
+            embeddings = model.embed(positive_pair_g, blocks)
+            predictions = model.predict(positive_pair_g, embeddings)
+            # pred_pos = model.embed(positive_pair_g, blocks)
             labels = positive_pair_g.edata['label'].unsqueeze(1)
-            loss = criterion(pred_pos, labels)
+            loss = criterion(predictions, labels)
             total_loss += float(loss)*batch_size
-            y_pred = pred_pos.sigmoid().cpu()
+            y_pred = predictions.sigmoid().cpu()
             y_true = labels.cpu()
             if not args.not_use_memory:
                 model.update_memory(positive_pair_g)
@@ -108,12 +117,14 @@ def test_val(model, dataloader, sampler, criterion, args, device):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--epochs", type=int, default=1,
+    parser.add_argument("--multi_class", action="store_true", default=False,
+                        help="test for multi classes")
+    parser.add_argument("--epochs", type=int, default=50,
                         help='epochs for training on entire dataset')
     parser.add_argument("--device_id", type=int,
                         default=3, help="gpu device id")
     parser.add_argument("--batch_size", type=int,
-                        default=50, help="Size of each batch")
+                        default=500, help="Size of each batch")
     parser.add_argument("--embedding_dim", type=int, default=100,
                         help="Embedding dim for link prediction")
     parser.add_argument("--proj_dim", type=int, default=100,
@@ -145,6 +156,7 @@ if __name__ == "__main__":
     parser.add_argument("--not_use_memory", action="store_true", default=False,
                         help="Enable memory for TGN Model disable memory for TGN Model")
 
+
     args = parser.parse_args()
     
     assert not (
@@ -152,15 +164,32 @@ if __name__ == "__main__":
     if args.k_hop != 1:
         assert args.simple_mode, "this k-hop parameter only support simple mode"
 
+    project_name = 'project_' + str(styleTime)
+    # comments=f"dataset({args.dataset})_multiclas({args.multi_class})_bsize({args.batch_size})_embeddingdim({args.embedding_dim}_projdim({args.proj_dim})_"
+    comments=f"dataset({args.dataset})_multiclas({args.multi_class})"
+    # dir_checkpoint = Path(f"./cache/{project_name}_{comments}/checkpoints/")
+    destination_folder = Path(f"./cache/{project_name}_{comments}/")
+
+    if not os.path.exists(destination_folder):
+        os.makedirs(destination_folder)
+
+    log_file = os.path.join(destination_folder, os.path.basename("logging.txt"))
+    f = open(log_file, 'w')
+    log_content = []
+    
+
     device_str = "cuda:" + str(args.device_id) if torch.cuda.is_available() else "cpu"
     device = torch.device(device_str)
     
-    if args.dataset == 'wikipedia':
+    
+    if args.dataset == 'wikipedia ':
         data = TemporalWikipediaDataset()
     elif args.dataset == 'reddit':
         data = TemporalRedditDataset()
     elif args.dataset == 'BoT-IoT':
-        data = TemporalBotiotDataset()
+        data = TemporalBotiotDataset(args.multi_class)
+    elif args.dataset == 'ToN-IoT':
+        data = TemporalToniotDataset(args.multi_class)
     else:
         print("Warning Using Untested Dataset: "+args.dataset)
         data = TemporalDataset(args.dataset)
@@ -206,7 +235,7 @@ if __name__ == "__main__":
 
     graph_no_new_node = copy.deepcopy(data)
     graph_no_new_node.remove_edges(eid_delete)
-
+    # graph_no_new_node.remove_nodes(test_new_nodes) # 不能删除节点，因为memory中的索引不能变。
     # graph_no_new_node and graph_new_node should have same set of nid
 
     # data = data.to(device)
@@ -261,7 +290,7 @@ if __name__ == "__main__":
     new_node_g_sampling = None if args.fast_mode else graph_new_node
     if not args.fast_mode:
         new_node_g_sampling.ndata[dgl.NID] = new_node_g_sampling.nodes()
-        g_sampling.ndata[dgl.NID] = new_node_g_sampling.nodes()
+        g_sampling.ndata[dgl.NID] = g_sampling.nodes()
 
     # we highly recommend that you always set the num_workers=0, otherwise the sampled subgraph may not be correct.
     print("g_sampling:", g_sampling)
@@ -341,7 +370,7 @@ if __name__ == "__main__":
     criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     # Implement Logging mechanism
-    f = open("logging.txt", 'w')
+    
     if args.fast_mode:
         sampler.reset()
     try:
