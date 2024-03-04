@@ -442,14 +442,18 @@ class EdgeGATConv(nn.Module):
             graph.apply_edges(fn.u_add_e('el', 'ee', 'el_prime'))
             graph.apply_edges(fn.e_add_v('el_prime', 'er', 'e'))
             e = self.leaky_relu(graph.edata['e'])
+            # 计算遍的注意力权重
             graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
             graph.edata['efeat'] = edge_feat
             graph.update_all(self.msg_fn, fn.sum('m', 'ft'))
             rst = graph.ndata['ft']
+            # print("rst.shape:", rst.shape)
             if self.residual:
                 resval = self.res_fc(nfeat).view(
                     nfeat.shape[0], -1, self._out_feats)
+                # print("resval.shape:", resval.shape)
                 rst = rst + resval
+                # print("rst.shape:", rst.shape)
 
             if self.activation:
                 rst = self.activation(rst)

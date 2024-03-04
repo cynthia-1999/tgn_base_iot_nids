@@ -74,7 +74,7 @@ class TGN(nn.Module):
         emb2pred = dict(
             zip(emb_graph.ndata[dgl.NID].tolist(), emb_graph.nodes().tolist()))
         # Since postive graph and negative graph has same is mapping
-        print("graph.ndata[dgl.NID]:", graph.ndata[dgl.NID])
+        # print("graph.ndata[dgl.NID]:", graph.ndata[dgl.NID])
         feat_id = [emb2pred[int(n)] for n in graph.ndata[dgl.NID]]
         feat = embedding[feat_id]
         # mal_pred = self.msg_malpredictor(

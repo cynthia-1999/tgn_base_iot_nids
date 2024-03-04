@@ -72,8 +72,8 @@ def move_column_to_position(input_csv, target_column_name, target_column_positio
 
 
 if __name__ == "__main__":
-    folder_path = '/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/zips'
-    file = '/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/zips/BoT-IoT.csv'
+    folder_path = '/root/zc/tgn_base_iot_nids/datasets/ToN-IoT/Processed_Network_dataset'
+    file = '/root/zc/tgn_base_iot_nids/datasets/ToN-IoT/Processed_Network_dataset/ToN-IoT.csv'
     # move_column_to_position(file, 'saddr', 1, file)
     # move_column_to_position(file, 'sport', 2, file)
     # move_column_to_position(file, 'daddr', 3, file)
