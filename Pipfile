@@ -16,6 +16,8 @@ torch-spline-conv = {file = "torch_spline_conv-1.2.2+pt21cu121-cp38-cp38-linux_x
 dgl-cu113 = {file = "dgl_cu113-0.9.1-cp38-cp38-manylinux1_x86_64.whl"}
 pyg-lib = {file = "pyg_lib-0.3.1+pt21cu121-cp38-cp38-linux_x86_64.whl"}
 torch-geometric = "*"
+category-encoders = "*"
+seaborn = "*"
 
 [dev-packages]
 

@@ -3,3 +3,6 @@
 *.whl
 __pycache__/
 utils/__init__.py
+log*
+/grace
+*.txt
