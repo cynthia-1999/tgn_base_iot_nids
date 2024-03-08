@@ -10,6 +10,7 @@ from functools import partial
 import copy
 import dgl.function as fn
 import numpy as np
+from collections import defaultdict
 
 def print_all_nodes(g):
     all_nodes = g.nodes()
@@ -92,7 +93,6 @@ class TemporalSampler(BlockSampler):
                          current_edge_index,
                          timestamp):
         # ToDo：src和dst要单独进行采样
-
         selected_edges = torch.empty(0, dtype=torch.int64)
         for seed_node in seed_nodes:
             full_neighbor_subgraph = dgl.in_subgraph(g, seed_node)
@@ -104,12 +104,12 @@ class TemporalSampler(BlockSampler):
                 full_neighbor_subgraph.edata['timestamp'] <= 0)
             true_indices = np.where(temporal_edge_mask)[0]
 
-            if len(true_indices) > 100:
-                # print("sampled edges > 100")
-                selected_indices = np.random.choice(true_indices, 100, replace=False)
-                temporal_edge_mask = np.zeros_like(temporal_edge_mask, dtype=bool)
-                temporal_edge_mask[selected_indices] = True
-                temporal_edge_mask = torch.from_numpy(temporal_edge_mask)
+            # if len(true_indices) > 100:
+            #     # print("sampled edges > 100")
+            #     selected_indices = np.random.choice(true_indices, 100, replace=False)
+            #     temporal_edge_mask = np.zeros_like(temporal_edge_mask, dtype=bool)
+            #     temporal_edge_mask[selected_indices] = True
+            #     temporal_edge_mask = torch.from_numpy(temporal_edge_mask)
             
             current_selected_edges = current_selected_edges[temporal_edge_mask]
             selected_edges = torch.cat((selected_edges, current_selected_edges), dim=0)
@@ -121,6 +121,7 @@ class TemporalSampler(BlockSampler):
         temporal_subgraph = dgl.edge_subgraph(g, selected_edges)
         # Map preserve ID
         temp2origin = temporal_subgraph.ndata[dgl.NID]
+        tempEdge2origin = temporal_subgraph.edata[dgl.EID]
 
         # The added new edgge will be preserved hence
         root2sub_dict = dict(
@@ -128,8 +129,13 @@ class TemporalSampler(BlockSampler):
         temporal_subgraph.ndata[dgl.NID] = g.ndata[dgl.NID][temp2origin]
         seed_nodes = [root2sub_dict[int(n)] for n in seed_nodes]
         # print("temporal_subgraph:", temporal_subgraph)
-        final_subgraph = self.sampler(g=temporal_subgraph, nodes=seed_nodes)
+        final_subgraph = self.sampler(g=temporal_subgraph, nodes=seed_nodes)  
         final_subgraph.remove_self_loop()
+
+        # remove unsed nodes from final_subgraph
+        final_edges = final_subgraph.edata[dgl.EID]
+        final_select_edges = [tempEdge2origin[n] for n in final_edges]
+        final_subgraph = dgl.edge_subgraph(g, final_select_edges)
         # print("final_subgraph:", final_subgraph)
         return final_subgraph
         # Temporal Subgraph

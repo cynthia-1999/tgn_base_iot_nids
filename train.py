@@ -46,9 +46,12 @@ def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, d
     for _, positive_pair_g, blocks in dataloader:
         print(f"Batch: {batch_cnt} start")
         positive_pair_g = positive_pair_g.to(device)
-        blocks[0] = blocks[0].to(device)
 
-        optimizer.zero_grad()
+        model.update_memory(positive_pair_g)
+        # blocks[0] = blocks[0].to(device)
+        # optimizer.zero_grad()
+
+        '''
         # 对比学习
         # ToDo: 尝试不同的对比目标
         g_feature = positive_pair_g.edata['feats']
@@ -63,21 +66,22 @@ def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, d
         loss = contrast_op.loss(z1, z2, batch_size=0)
  
         positive_pair_g.edata['feats'] = g_feature
-
+        '''
         # predict
-        embeddings = model.embed(positive_pair_g, blocks)
-        predictions = model.predict(positive_pair_g, embeddings)
-        labels = positive_pair_g.edata['label'].unsqueeze(1)
-        loss += criterion(predictions, labels)
-        # loss += criterion(pred_neg, torch.zeros_like(pred_neg))
-        total_loss += float(loss)*args.batch_size
-        retain_graph = True if batch_cnt == 0 else False
-        loss.backward(retain_graph=retain_graph)
-        optimizer.step()
+
+        # embeddings = model.embed(positive_pair_g, blocks)
+        # predictions = model.predict(positive_pair_g, embeddings)
+        # labels = positive_pair_g.edata['label'].unsqueeze(1)
+        # loss = criterion(predictions, labels)
+        # # loss += criterion(predictions, labels)
+        # # loss += criterion(pred_neg, torch.zeros_like(pred_neg))
+        # total_loss += float(loss)*args.batch_size
+        # retain_graph = True if batch_cnt == 0 else False
+        # loss.backward(retain_graph=retain_graph)
+        # optimizer.step()
         model.detach_memory()
         # ToDo: 更新内存的时机应该在预测之前
-        if not args.not_use_memory:
-            model.update_memory(positive_pair_g)
+        # if not args.not_use_memory:
         print("Batch: ", batch_cnt, "Time: ", time.time()-last_t)
         last_t = time.time()
         batch_cnt += 1
@@ -92,7 +96,8 @@ def test_val(model, dataloader, sampler, criterion, args, device):
     with torch.no_grad():
         # for _, positive_pair_g, negative_pair_g, blocks in dataloader:
         for _, positive_pair_g, blocks in dataloader:
-            positive_pair_g = positive_pair_g.to(device) 
+            positive_pair_g = positive_pair_g.to(device)
+            model.update_memory(positive_pair_g) 
             blocks[0] = blocks[0].to(device)
             embeddings = model.embed(positive_pair_g, blocks)
             predictions = model.predict(positive_pair_g, embeddings)
@@ -102,8 +107,6 @@ def test_val(model, dataloader, sampler, criterion, args, device):
             total_loss += float(loss)*batch_size
             y_pred = predictions.sigmoid().cpu()
             y_true = labels.cpu()
-            if not args.not_use_memory:
-                model.update_memory(positive_pair_g)
             aps.append(average_precision_score(y_true, y_pred))
             # aucs.append(roc_auc_score(y_true, y_pred))
             batch_cnt += 1
