@@ -38,16 +38,17 @@ def my_clone_graph(g, device):
     # g_copy.edata[dgl.EID] = g.edges()
     return g_copy
 
-def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, device):
+def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, device, batch_folder):
     model.train()
     total_loss = 0
     batch_cnt = 0
     last_t = time.time()
     for _, positive_pair_g, blocks in dataloader:
+        dgl.save_graphs(batch_folder + '/batch{}.bin'.format(batch_cnt), [positive_pair_g, blocks[0]])
         print(f"Batch: {batch_cnt} start")
         positive_pair_g = positive_pair_g.to(device)
 
-        model.update_memory(positive_pair_g)
+        # model.update_memory(positive_pair_g)
         # blocks[0] = blocks[0].to(device)
         # optimizer.zero_grad()
 
@@ -79,7 +80,7 @@ def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, d
         # retain_graph = True if batch_cnt == 0 else False
         # loss.backward(retain_graph=retain_graph)
         # optimizer.step()
-        model.detach_memory()
+        # model.detach_memory()
         # ToDo: 更新内存的时机应该在预测之前
         # if not args.not_use_memory:
         print("Batch: ", batch_cnt, "Time: ", time.time()-last_t)
@@ -87,7 +88,7 @@ def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, d
         batch_cnt += 1
     return total_loss
 
-def test_val(model, dataloader, sampler, criterion, args, device):
+def test_val(model, dataloader, sampler, criterion, args, device, batch_folder):
     model.eval()
     batch_size = args.batch_size
     total_loss = 0
@@ -96,8 +97,10 @@ def test_val(model, dataloader, sampler, criterion, args, device):
     with torch.no_grad():
         # for _, positive_pair_g, negative_pair_g, blocks in dataloader:
         for _, positive_pair_g, blocks in dataloader:
+            dgl.save_graphs(batch_folder + '/batch{}.bin'.format(batch_cnt), [positive_pair_g, blocks[0]])
+            '''
             positive_pair_g = positive_pair_g.to(device)
-            model.update_memory(positive_pair_g) 
+            model.update_memory(positive_pair_g)
             blocks[0] = blocks[0].to(device)
             embeddings = model.embed(positive_pair_g, blocks)
             predictions = model.predict(positive_pair_g, embeddings)
@@ -109,6 +112,7 @@ def test_val(model, dataloader, sampler, criterion, args, device):
             y_true = labels.cpu()
             aps.append(average_precision_score(y_true, y_pred))
             # aucs.append(roc_auc_score(y_true, y_pred))
+            '''
             batch_cnt += 1
     return float(torch.tensor(aps).mean()), float(torch.tensor(aucs).mean())
 
@@ -172,7 +176,7 @@ if __name__ == "__main__":
     device_str = "cuda:" + str(args.device_id) if torch.cuda.is_available() else "cpu"
     device = torch.device(device_str)
     print("device:", device_str)
-    
+
     if args.dataset == 'BoT-IoT':
         data = TemporalBotiotDataset(args.multi_class)
     elif args.dataset == 'ToN-IoT':
@@ -181,6 +185,14 @@ if __name__ == "__main__":
         print("Warning Using Untested Dataset: "+args.dataset)
         data = MyTemporalDataset(args.dataset)
 
+    # Sampler Initialization
+    sampler = TemporalSampler(k=args.n_neighbors)
+    edge_collator = TemporalEdgeCollator
+
+    neg_sampler = None
+    
+    # '''
+    
     # data = data.to(device)
     # Pre-process data, mask new node in test set from original graph
     num_nodes = data.num_nodes()
@@ -228,14 +240,10 @@ if __name__ == "__main__":
     # data = data.to(device)
     # graph_no_new_node = graph_no_new_node.to(device)
     # graph_new_node = graph_new_node.to(device)
-    # Sampler Initialization
-    sampler = TemporalSampler(k=args.n_neighbors)
-    edge_collator = TemporalEdgeCollator
 
     # ToDo: remove negative edge
     # neg_sampler = dgl.dataloading.negative_sampler.Uniform(
     #     k=0)
-    neg_sampler = None
     
     # Set Train, validation, test and new node test id
     #  
@@ -261,6 +269,28 @@ if __name__ == "__main__":
     # ToDo: if need add_reverse_edges?
     # g_sampling = dgl.add_reverse_edges(graph_no_new_node, copy_edata=True)
     # new_node_g_sampling = dgl.add_reverse_edges(graph_new_node, copy_edata=True)
+    
+    # '''
+
+    dataset_path = "/root/zc/tgn_base_iot_nids/datasets/" + args.dataset + "/"
+    saved_folder = dataset_path + ("saved_multiclass/" if args.multi_class else "saved_binary/")
+    saved_graphs = saved_folder + "saved_graphs.bin"
+    saved_seeds = saved_folder + "seeds.pt"
+
+    
+    # save process graphs and seeds
+    print("test")
+    dgl.save_graphs(saved_graphs, [graph_no_new_node, graph_new_node])
+    torch.save({'train_seed': train_seed, 'valid_seed': valid_seed, 'test_seed': test_seed, 'test_new_node_seed': test_new_node_seed}, saved_seeds)
+    
+
+    '''
+    # load process graphs and seeds
+    gs, _ = dgl.load_graphs(saved_graphs)
+    graph_no_new_node, graph_new_node = gs[0], gs[1]
+    load_seeds = torch.load(saved_seeds)
+    train_seed, valid_seed, test_seed, test_new_node_seed = load_seeds['train_seed'], load_seeds['valid_seed'], load_seeds['test_new_node_seed'], load_seeds['valid_seed']
+    '''
 
     g_sampling = graph_no_new_node
     new_node_g_sampling = graph_new_node
@@ -268,8 +298,6 @@ if __name__ == "__main__":
     g_sampling.ndata[dgl.NID] = g_sampling.nodes()
 
     # we highly recommend that you always set the num_workers=0, otherwise the sampled subgraph may not be correct.
-    print("g_sampling:", g_sampling)
-    print("new_node_g_sampling:", new_node_g_sampling)
     train_dataloader = TemporalEdgeDataLoader(graph_no_new_node,
                                               train_seed,
                                               sampler,
@@ -319,7 +347,7 @@ if __name__ == "__main__":
                                                       g_sampling=new_node_g_sampling)
 
     edge_dim = data.edata['feats'].shape[1]
-    num_node = data.num_nodes()
+    num_nodes = data.num_nodes()
 
     print("edge_dim:", edge_dim)
     print("memory_dim:", args.memory_dim)
@@ -336,7 +364,7 @@ if __name__ == "__main__":
                 temporal_dim=args.temporal_dim,
                 embedding_dim=args.embedding_dim,
                 num_heads=args.num_heads,
-                num_nodes=num_node,
+                num_nodes=num_nodes,
                 n_neighbors=args.n_neighbors,
                 memory_updater_type=args.memory_updater,
                 layers=args.k_hop, device=device).to(device)
@@ -345,21 +373,26 @@ if __name__ == "__main__":
     criterion = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     # Implement Logging mechanism
+
+    train_batch_folder = "/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_binary/train_batch"
+    test_batch_folder = "/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_binary/test_batch"
+    valid_batch_folder = "/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_binary/valid_batch"
+    test_new_batch_folder = "/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_binary/test_new_batch"
     
     try:
         for i in range(args.epochs):
             print("epoch ", i)
             train_loss = train(model, contrast_op, train_dataloader, sampler, 
-                               criterion, optimizer, args, device)
+                               criterion, optimizer, args, device, train_batch_folder)
             val_ap, val_auc = test_val(
-                model, valid_dataloader, sampler, criterion, args, device)
+                model, valid_dataloader, sampler, criterion, args, device, valid_batch_folder)
             memory_checkpoint = model.store_memory()
             test_ap, test_auc = test_val(
-                model, test_dataloader, sampler, criterion, args, device)
+                model, test_dataloader, sampler, criterion, args, device, test_batch_folder)
             model.restore_memory(memory_checkpoint)
             sample_nn = sampler
             nn_test_ap, nn_test_auc = test_val(
-                model, test_new_node_dataloader, sample_nn, criterion, args, device)
+                model, test_new_node_dataloader, sample_nn, criterion, args, device, test_new_batch_folder)
             log_content = []
             log_content.append("Epoch: {}; Training Loss: {} | Validation AP: {:.3f} AUC: {:.3f}\n".format(
                 i, train_loss, val_ap, val_auc))
