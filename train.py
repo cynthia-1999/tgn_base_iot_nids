@@ -121,7 +121,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--multi_class", action="store_true", default=False,
                         help="test for multi classes")
-    parser.add_argument("--epochs", type=int, default=50,
+    parser.add_argument("--epochs", type=int, default=1,
                         help='epochs for training on entire dataset')
     parser.add_argument("--device_id", type=int,
                         default=3, help="gpu device id")
@@ -191,7 +191,7 @@ if __name__ == "__main__":
 
     neg_sampler = None
     
-    # '''
+    '''
     
     # data = data.to(device)
     # Pre-process data, mask new node in test set from original graph
@@ -270,27 +270,27 @@ if __name__ == "__main__":
     # g_sampling = dgl.add_reverse_edges(graph_no_new_node, copy_edata=True)
     # new_node_g_sampling = dgl.add_reverse_edges(graph_new_node, copy_edata=True)
     
-    # '''
+    '''
 
     dataset_path = "/root/zc/tgn_base_iot_nids/datasets/" + args.dataset + "/"
     saved_folder = dataset_path + ("saved_multiclass/" if args.multi_class else "saved_binary/")
     saved_graphs = saved_folder + "saved_graphs.bin"
     saved_seeds = saved_folder + "seeds.pt"
 
-    
+    '''
     # save process graphs and seeds
     print("test")
     dgl.save_graphs(saved_graphs, [graph_no_new_node, graph_new_node])
     torch.save({'train_seed': train_seed, 'valid_seed': valid_seed, 'test_seed': test_seed, 'test_new_node_seed': test_new_node_seed}, saved_seeds)
-    
-
     '''
+
+    # '''
     # load process graphs and seeds
     gs, _ = dgl.load_graphs(saved_graphs)
     graph_no_new_node, graph_new_node = gs[0], gs[1]
     load_seeds = torch.load(saved_seeds)
     train_seed, valid_seed, test_seed, test_new_node_seed = load_seeds['train_seed'], load_seeds['valid_seed'], load_seeds['test_new_node_seed'], load_seeds['valid_seed']
-    '''
+    # '''
 
     g_sampling = graph_no_new_node
     new_node_g_sampling = graph_new_node
@@ -306,7 +306,7 @@ if __name__ == "__main__":
                                               negative_sampler=neg_sampler,
                                               shuffle=False,
                                               drop_last=False,
-                                              num_workers=0,
+                                              num_workers=16,
                                               collator=edge_collator,
                                               g_sampling=g_sampling)
 
@@ -318,7 +318,7 @@ if __name__ == "__main__":
                                               negative_sampler=neg_sampler,
                                               shuffle=False,
                                               drop_last=False,
-                                              num_workers=0,
+                                              num_workers=16,
                                               collator=edge_collator,
                                               g_sampling=g_sampling)
 
@@ -330,7 +330,7 @@ if __name__ == "__main__":
                                              negative_sampler=neg_sampler,
                                              shuffle=False,
                                              drop_last=False,
-                                             num_workers=0,
+                                             num_workers=16,
                                              collator=edge_collator,
                                              g_sampling=g_sampling)
 
@@ -342,7 +342,7 @@ if __name__ == "__main__":
                                                       negative_sampler=neg_sampler,
                                                       shuffle=False,
                                                       drop_last=False,
-                                                      num_workers=0,
+                                                      num_workers=16,
                                                       collator=edge_collator,
                                                       g_sampling=new_node_g_sampling)
 
@@ -374,10 +374,10 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     # Implement Logging mechanism
 
-    train_batch_folder = "/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_binary/train_batch"
-    test_batch_folder = "/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_binary/test_batch"
-    valid_batch_folder = "/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_binary/valid_batch"
-    test_new_batch_folder = "/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_binary/test_new_batch"
+    train_batch_folder = saved_folder + "train_batch"
+    test_batch_folder = saved_folder + "test_batch"
+    valid_batch_folder = saved_folder + "valid_batch"
+    test_new_batch_folder = saved_folder + "test_new_batch"
     
     try:
         for i in range(args.epochs):
