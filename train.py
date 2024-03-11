@@ -278,7 +278,7 @@ if __name__ == "__main__":
                                               negative_sampler=neg_sampler,
                                               shuffle=False,
                                               drop_last=False,
-                                              num_workers=0,
+                                              num_workers=16,
                                               collator=edge_collator,
                                               g_sampling=g_sampling)
 
@@ -290,7 +290,7 @@ if __name__ == "__main__":
                                               negative_sampler=neg_sampler,
                                               shuffle=False,
                                               drop_last=False,
-                                              num_workers=0,
+                                              num_workers=16,
                                               collator=edge_collator,
                                               g_sampling=g_sampling)
 
@@ -302,7 +302,7 @@ if __name__ == "__main__":
                                              negative_sampler=neg_sampler,
                                              shuffle=False,
                                              drop_last=False,
-                                             num_workers=0,
+                                             num_workers=16,
                                              collator=edge_collator,
                                              g_sampling=g_sampling)
 
@@ -314,7 +314,7 @@ if __name__ == "__main__":
                                                       negative_sampler=neg_sampler,
                                                       shuffle=False,
                                                       drop_last=False,
-                                                      num_workers=0,
+                                                      num_workers=16,
                                                       collator=edge_collator,
                                                       g_sampling=new_node_g_sampling)
 
