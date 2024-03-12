@@ -48,11 +48,12 @@ def my_preprocess(data_path, data_name, multi_class):
         le = LabelEncoder()
         le.fit_transform(data.label.values)
         data['label'] = le.transform(data['label'])
+        label2actual = le.inverse_transform([0, 1, 2, 3, 4])
+        np.save('/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_multiclass/test_batch/actual.npy', label2actual)
     else:
         print("test")
         data.drop(columns=['category'],inplace=True)
         data.rename(columns={"attack": "label"},inplace = True)
-    
     print("data.columns:", data.columns)
     data['saddr'] = data.saddr.apply(str)
     data['sport'] = data.sport.apply(str)
@@ -135,6 +136,9 @@ def ton_preprocess(data_path, data_name, multi_class):
         le = LabelEncoder()
         le.fit_transform(data.label.values)
         data['label'] = le.transform(data['label'])
+        label2actual = le.inverse_transform([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+        np.save('/root/zc/tgn_base_iot_nids/datasets/ToN-IoT/saved_multiclass/test_batch/actual.npy', label2actual)
+        print("label2actual:", label2actual)
     else:
         data.drop(columns=['type'],inplace=True)
     
