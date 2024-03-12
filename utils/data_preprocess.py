@@ -222,6 +222,8 @@ def MyTemporalDataset(dataset, multi_class):
             raw_connection['ts'].to_numpy())
         g.edata['label'] = torch.from_numpy(raw_connection['label'].to_numpy())
         g.edata['feats'] = torch.from_numpy(raw_feature[1:, :]).float()
+        sorted_indices = torch.argsort(g.edata['timestamp'])
+        g = g.edge_subgraph(sorted_indices)
         dgl.save_graphs(datapath + '/{}.bin'.format(file_name), [g])
     else:
         print("Data is exist directly loaded.")
