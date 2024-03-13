@@ -24,11 +24,11 @@ class Identity(nn.Module):
         return x
 
 class MsgMalPredictor(nn.Module):
-    def __init__(self, emb_dim):
+    def __init__(self, emb_dim, out_classes):
         super(MsgMalPredictor, self).__init__()
         self.src_fc = nn.Linear(emb_dim, emb_dim)
         self.dst_fc = nn.Linear(emb_dim, emb_dim)
-        self.out_fc = nn.Linear(emb_dim, 1)
+        self.out_fc = nn.Linear(emb_dim, out_classes)
 
     def mal_pred(self, edges):
         src_hid = self.src_fc(edges.src['embedding'])

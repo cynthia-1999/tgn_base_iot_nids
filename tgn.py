@@ -7,6 +7,7 @@ from graph_model.modules import MemoryModule, MemoryOperation, MsgLinkPredictor,
 class TGN(nn.Module):
     def __init__(self,
                  edge_feat_dim,
+                 out_classes,
                  memory_dim,
                  temporal_dim,
                  embedding_dim,
@@ -47,7 +48,7 @@ class TGN(nn.Module):
                                                       allow_zero_in_degree=True).to(device)
 
         self.msg_linkpredictor = MsgLinkPredictor(embedding_dim).to(device)
-        self.msg_malpredictor = MsgMalPredictor(embedding_dim).to(device)
+        self.msg_malpredictor = MsgMalPredictor(embedding_dim, out_classes).to(device)
 
     # def embed(self, postive_graph, negative_graph, blocks):
     #     emb_graph = blocks[0]
