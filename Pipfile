@@ -18,6 +18,9 @@ pyg-lib = {file = "pyg_lib-0.3.1+pt21cu121-cp38-cp38-linux_x86_64.whl"}
 torch-geometric = "*"
 category-encoders = "*"
 seaborn = "*"
+tensorboard = "*"
+umap = "*"
+umap-learn = "*"
 
 [dev-packages]
 

@@ -33,16 +33,17 @@ class MsgMalPredictor(nn.Module):
     def mal_pred(self, edges):
         src_hid = self.src_fc(edges.src['embedding'])
         dst_hid = self.dst_fc(edges.dst['embedding'])
-        score = F.relu(src_hid+dst_hid)
-        score = self.out_fc(score)
-        return {'score': score}
+        edge_embs = F.relu(src_hid+dst_hid)
+        score = self.out_fc(edge_embs)
+        return {'score': score, 'emb': edge_embs}
 
     def forward(self, x, g):
         # Local Scope?
         g.ndata['embedding'] = x
         g.apply_edges(self.mal_pred)
         escore = g.edata['score']
-        return escore
+        embs = g.edata['emb']
+        return escore, embs
 
 # 一个用于链接预测的模块，使用消息传递的方式来预测正样本子图和负样本子图之间的链接
 # 这个模块的目的是从子图中学习链接预测任务，其中正样本子图和负样本子图都包含节点特征以及它们之间的链接信息。

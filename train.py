@@ -14,10 +14,13 @@ from utils.data_preprocess import MyTemporalDataset, TemporalBotiotDataset, Temp
 from utils.dataloading import (TemporalEdgeDataLoader, TemporalSampler, TemporalEdgeCollator)
 
 from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.utils import class_weight
+from sklearn.preprocessing import OneHotEncoder
+
 from contrast import drop_feature, ContrastModule
+from torch.utils.tensorboard import SummaryWriter
 
 TRAIN_SPLIT = 0.7
-VALID_SPLIT = 0.85
 
 DROP_FEATURE_RATE_1 = 0.3
 DROP_FEATURE_RATE_2 = 0.2
@@ -38,19 +41,28 @@ def my_clone_graph(g, device):
     # g_copy.edata[dgl.EID] = g.edges()
     return g_copy
 
+def compute_accuracy(pred, labels):
+    return (pred.argmax(1) == labels).float().mean().item()
+
 def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, device, batch_folder):
     model.train()
     total_loss = 0
     batch_cnt = 0
+    train_acc = []
     last_t = time.time()
-    for _, positive_pair_g, blocks in dataloader:
-        dgl.save_graphs(batch_folder + '/batch{}.bin'.format(batch_cnt), [positive_pair_g, blocks[0]])
-        print(f"Batch: {batch_cnt} start")
-        positive_pair_g = positive_pair_g.to(device)
-
-        # model.update_memory(positive_pair_g)
-        # blocks[0] = blocks[0].to(device)
-        # optimizer.zero_grad()
+    batch_files = [f for f in os.listdir(batch_folder) if f.endswith('.bin')]
+    # for _, g, blocks in dataloader:
+        # dgl.save_graphs(batch_folder + '/batch{}.bin'.format(batch_cnt), [g, blocks[0]])
+    for batch_file in batch_files:
+        file_path = os.path.join(batch_folder, batch_file)
+        gs, _ = dgl.load_graphs(file_path)
+        g, block = gs[0], gs[1]
+        blocks = []
+        blocks.append(block)
+        g = g.to(device)
+        model.update_memory(g)
+        blocks[0] = blocks[0].to(device)
+        optimizer.zero_grad()
 
         '''
         # 对比学习
@@ -69,59 +81,76 @@ def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, d
         positive_pair_g.edata['feats'] = g_feature
         '''
         # predict
-
-        # embeddings = model.embed(positive_pair_g, blocks)
-        # predictions = model.predict(positive_pair_g, embeddings)
-        # labels = positive_pair_g.edata['label'].unsqueeze(1)
-        # loss = criterion(predictions, labels)
-        # # loss += criterion(predictions, labels)
-        # # loss += criterion(pred_neg, torch.zeros_like(pred_neg))
-        # total_loss += float(loss)*args.batch_size
-        # retain_graph = True if batch_cnt == 0 else False
-        # loss.backward(retain_graph=retain_graph)
-        # optimizer.step()
-        # model.detach_memory()
-        # ToDo: 更新内存的时机应该在预测之前
-        # if not args.not_use_memory:
-        print("Batch: ", batch_cnt, "Time: ", time.time()-last_t)
+        embeddings = model.embed(g, blocks)
+        predictions, _ = model.predict(g, embeddings)
+        labels = g.edata['label']
+        labels = labels.type(torch.LongTensor).to(device)
+        loss = criterion(predictions, labels)
+        # loss += criterion(predictions, labels)
+        total_loss += float(loss)*args.batch_size
+        retain_graph = True if batch_cnt == 0 else False
+        loss.backward(retain_graph=retain_graph)
+        optimizer.step()
+        model.detach_memory()
+        
+        train_acc.append(compute_accuracy(predictions, labels))
         last_t = time.time()
         batch_cnt += 1
-    return total_loss
+    return total_loss, float(torch.tensor(train_acc).mean())
 
-def test_val(model, dataloader, sampler, criterion, args, device, batch_folder):
+def test(model, dataloader, sampler, criterion, args, device, batch_folder, classes):
     model.eval()
     batch_size = args.batch_size
     total_loss = 0
-    aps, aucs = [], []
+    actuals, test_preds, test_embeddings, test_scores = [], [], [], []
+    test_acc = []
     batch_cnt = 0
+    batch_files = [f for f in os.listdir(batch_folder) if f.endswith('.bin')]
+    # label2actual = ['']
+    if classes == 2:
+        label2actual = ["Normal", "Attack"]
+    else:
+        label2actual = np.load(batch_folder + '/actual.npy', allow_pickle=True)
     with torch.no_grad():
-        # for _, positive_pair_g, negative_pair_g, blocks in dataloader:
-        for _, positive_pair_g, blocks in dataloader:
-            dgl.save_graphs(batch_folder + '/batch{}.bin'.format(batch_cnt), [positive_pair_g, blocks[0]])
-            '''
-            positive_pair_g = positive_pair_g.to(device)
-            model.update_memory(positive_pair_g)
+        # for _, g, blocks in dataloader:
+        #     dgl.save_graphs(batch_folder + '/batch{}.bin'.format(batch_cnt), [g, blocks[0]])
+        for batch_file in batch_files:
+            file_path = os.path.join(batch_folder, batch_file)
+            gs, _ = dgl.load_graphs(file_path)
+            g, block = gs[0], gs[1]
+            blocks = []
+            blocks.append(block)
+            g = g.to(device)
+            model.update_memory(g)
             blocks[0] = blocks[0].to(device)
-            embeddings = model.embed(positive_pair_g, blocks)
-            predictions = model.predict(positive_pair_g, embeddings)
-            # pred_pos = model.embed(positive_pair_g, blocks)
-            labels = positive_pair_g.edata['label'].unsqueeze(1)
+            embeddings = model.embed(g, blocks)
+            predictions, edge_embs = model.predict(g, embeddings)
+            labels = g.edata['label']
+            labels = labels.type(torch.LongTensor).to(device)
             loss = criterion(predictions, labels)
             total_loss += float(loss)*batch_size
-            y_pred = predictions.sigmoid().cpu()
-            y_true = labels.cpu()
-            aps.append(average_precision_score(y_true, y_pred))
-            # aucs.append(roc_auc_score(y_true, y_pred))
-            '''
+
+            test_acc.append(compute_accuracy(predictions, labels))
+
+            test_pred = predictions.argmax(1).cpu().numpy().astype(int)
+            labels_numpy = labels.cpu().numpy().astype(int)
+            test_actual = [label2actual[label] for label in labels_numpy]
+            test_pred = [label2actual[i] for i in test_pred]
+            
+            actuals.append(test_actual)
+            test_preds.append(test_pred)
+            test_embeddings.append(edge_embs.cpu().numpy())
+            test_scores.append(predictions.cpu().numpy())
             batch_cnt += 1
-    return float(torch.tensor(aps).mean()), float(torch.tensor(aucs).mean())
+
+    return float(torch.tensor(test_acc).mean()), actuals, test_preds, label2actual, total_loss, test_embeddings, test_scores
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--multi_class", action="store_true", default=False,
                         help="test for multi classes")
-    parser.add_argument("--epochs", type=int, default=1,
+    parser.add_argument("--epochs", type=int, default=100,
                         help='epochs for training on entire dataset')
     parser.add_argument("--device_id", type=int,
                         default=3, help="gpu device id")
@@ -163,6 +192,7 @@ if __name__ == "__main__":
     # comments=f"dataset({args.dataset})_multiclas({args.multi_class})_bsize({args.batch_size})_embeddingdim({args.embedding_dim}_projdim({args.proj_dim})_"
     comments=f"dataset({args.dataset})_multiclas({args.multi_class})"
     # dir_checkpoint = Path(f"./cache/{project_name}_{comments}/checkpoints/")
+    writer = SummaryWriter(comment=comments)
     destination_folder = Path(f"./cache/{project_name}_{comments}/")
 
     if not os.path.exists(destination_folder):
@@ -179,8 +209,11 @@ if __name__ == "__main__":
 
     if args.dataset == 'BoT-IoT':
         data = TemporalBotiotDataset(args.multi_class)
+        classes = 5 if args.multi_class else 2
     elif args.dataset == 'ToN-IoT':
         data = TemporalToniotDataset(args.multi_class)
+        classes = 10 if args.multi_class else 2
+
     else:
         print("Warning Using Untested Dataset: "+args.dataset)
         data = MyTemporalDataset(args.dataset)
@@ -190,115 +223,29 @@ if __name__ == "__main__":
     edge_collator = TemporalEdgeCollator
 
     neg_sampler = None
-    
-    '''
-    
-    # data = data.to(device)
-    # Pre-process data, mask new node in test set from original graph
+
     num_nodes = data.num_nodes()
     num_edges = data.num_edges()
+    traintest_div = int(TRAIN_SPLIT*num_edges)
+    test_split_ts = data.edata['timestamp'][traintest_div]
 
-    print("num_nodes:", num_nodes)
-    print("num_edges:", num_edges)
+    print("data:", data)
+    eids = torch.arange(0, num_edges)
+    train_edge_mask = (data.edata['timestamp'] <= test_split_ts) + (data.edata['timestamp'] <= 0)
+    test_edge_mask = data.edata['timestamp'] > test_split_ts
 
-    trainval_div = int(VALID_SPLIT*num_edges)
-    print("trainval_div:", trainval_div)
-
-    # Select new node from test set and remove them from entire graph
-    test_split_ts = data.edata['timestamp'][trainval_div]
-    test_nodes = torch.cat([data.edges()[0][trainval_div:], data.edges()[
-                           1][trainval_div:]]).unique().numpy()
-    test_new_nodes = np.random.choice(
-        test_nodes, int(0.1*len(test_nodes)), replace=False)
-    print("test_new_nodes:", test_new_nodes)
-
-    # indegree
-    in_subg = dgl.in_subgraph(data, test_new_nodes)
-    # outdegree
-    out_subg = dgl.out_subgraph(data, test_new_nodes)
+    train_seed, test_seed = eids[train_edge_mask], eids[test_edge_mask]
     
-    # Remove edge who happen before the test set to prevent from learning the connection info
-    new_node_in_eid_delete = in_subg.edata[dgl.EID][in_subg.edata['timestamp'] < test_split_ts]
-    new_node_out_eid_delete = out_subg.edata[dgl.EID][out_subg.edata['timestamp'] < test_split_ts]
-    new_node_eid_delete = torch.cat(
-        [new_node_in_eid_delete, new_node_out_eid_delete]).unique()
-
-    graph_new_node = copy.deepcopy(data)
-    # relative order preseved
-    graph_new_node.remove_edges(new_node_eid_delete)
-
-    # Now for no new node graph, all edge id need to be removed
-    in_eid_delete = in_subg.edata[dgl.EID]
-    out_eid_delete = out_subg.edata[dgl.EID]
-    eid_delete = torch.cat([in_eid_delete, out_eid_delete]).unique()
-
-    graph_no_new_node = copy.deepcopy(data)
-    graph_no_new_node.remove_edges(eid_delete)
-    # graph_no_new_node.remove_nodes(test_new_nodes) # 不能删除节点，因为memory中的索引不能变。
-    # graph_no_new_node and graph_new_node should have same set of nid
-
-    # data = data.to(device)
-    # graph_no_new_node = graph_no_new_node.to(device)
-    # graph_new_node = graph_new_node.to(device)
-
-    # ToDo: remove negative edge
-    # neg_sampler = dgl.dataloading.negative_sampler.Uniform(
-    #     k=0)
+    print("train_seed:", train_seed)
+    print("len(train_seed):", len(train_seed))
+    print("test_seed:", test_seed)
+    print("len(test_seed):", len(test_seed))
     
-    # Set Train, validation, test and new node test id
-    #  
-    # 不包含新节点的训练数据
-    # train_seed = torch.arange(int(TRAIN_SPLIT*graph_no_new_node.num_edges())).to(device)
-    train_seed = torch.arange(int(TRAIN_SPLIT*graph_no_new_node.num_edges()))
-    # 不包含新节点的验证数据
-    # valid_seed = torch.arange(int(
-    #     TRAIN_SPLIT*graph_no_new_node.num_edges()), trainval_div-new_node_eid_delete.size(0)).to(device)
-    valid_seed = torch.arange(int(
-        TRAIN_SPLIT*graph_no_new_node.num_edges()), trainval_div-new_node_eid_delete.size(0))
-    # 不包含新节点的测试数据
-    # test_seed = torch.arange(
-    #     trainval_div-new_node_eid_delete.size(0), graph_no_new_node.num_edges()).to(device)
-    test_seed = torch.arange(
-        trainval_div-new_node_eid_delete.size(0), graph_no_new_node.num_edges())
-    # 包含新节点的测试数据
-    # test_new_node_seed = torch.arange(
-    #     trainval_div-new_node_eid_delete.size(0), graph_new_node.num_edges()).to(device)
-    test_new_node_seed = torch.arange(
-        trainval_div-new_node_eid_delete.size(0), graph_new_node.num_edges())
-
-    # ToDo: if need add_reverse_edges?
-    # g_sampling = dgl.add_reverse_edges(graph_no_new_node, copy_edata=True)
-    # new_node_g_sampling = dgl.add_reverse_edges(graph_new_node, copy_edata=True)
-    
-    '''
-
-    dataset_path = "/root/zc/tgn_base_iot_nids/datasets/" + args.dataset + "/"
-    saved_folder = dataset_path + ("saved_multiclass/" if args.multi_class else "saved_binary/")
-    saved_graphs = saved_folder + "saved_graphs.bin"
-    saved_seeds = saved_folder + "seeds.pt"
-
-    '''
-    # save process graphs and seeds
-    print("test")
-    dgl.save_graphs(saved_graphs, [graph_no_new_node, graph_new_node])
-    torch.save({'train_seed': train_seed, 'valid_seed': valid_seed, 'test_seed': test_seed, 'test_new_node_seed': test_new_node_seed}, saved_seeds)
-    '''
-
-    # '''
-    # load process graphs and seeds
-    gs, _ = dgl.load_graphs(saved_graphs)
-    graph_no_new_node, graph_new_node = gs[0], gs[1]
-    load_seeds = torch.load(saved_seeds)
-    train_seed, valid_seed, test_seed, test_new_node_seed = load_seeds['train_seed'], load_seeds['valid_seed'], load_seeds['test_new_node_seed'], load_seeds['valid_seed']
-    # '''
-
-    g_sampling = graph_no_new_node
-    new_node_g_sampling = graph_new_node
-    new_node_g_sampling.ndata[dgl.NID] = new_node_g_sampling.nodes()
+    g_sampling = data
     g_sampling.ndata[dgl.NID] = g_sampling.nodes()
 
     # we highly recommend that you always set the num_workers=0, otherwise the sampled subgraph may not be correct.
-    train_dataloader = TemporalEdgeDataLoader(graph_no_new_node,
+    train_dataloader = TemporalEdgeDataLoader(data,
                                               train_seed,
                                               sampler,
                                             #   device_str,
@@ -310,19 +257,7 @@ if __name__ == "__main__":
                                               collator=edge_collator,
                                               g_sampling=g_sampling)
 
-    valid_dataloader = TemporalEdgeDataLoader(graph_no_new_node,
-                                              valid_seed,
-                                              sampler,
-                                            #   device_str,
-                                              batch_size=args.batch_size,
-                                              negative_sampler=neg_sampler,
-                                              shuffle=False,
-                                              drop_last=False,
-                                              num_workers=16,
-                                              collator=edge_collator,
-                                              g_sampling=g_sampling)
-
-    test_dataloader = TemporalEdgeDataLoader(graph_no_new_node,
+    test_dataloader = TemporalEdgeDataLoader(data,
                                              test_seed,
                                              sampler,
                                             #  device_str,
@@ -334,20 +269,8 @@ if __name__ == "__main__":
                                              collator=edge_collator,
                                              g_sampling=g_sampling)
 
-    test_new_node_dataloader = TemporalEdgeDataLoader(graph_new_node,
-                                                      test_new_node_seed,
-                                                      sampler,
-                                                    #   device_str,
-                                                      batch_size=args.batch_size,
-                                                      negative_sampler=neg_sampler,
-                                                      shuffle=False,
-                                                      drop_last=False,
-                                                      num_workers=16,
-                                                      collator=edge_collator,
-                                                      g_sampling=new_node_g_sampling)
 
     edge_dim = data.edata['feats'].shape[1]
-    num_nodes = data.num_nodes()
 
     print("edge_dim:", edge_dim)
     print("memory_dim:", args.memory_dim)
@@ -356,10 +279,12 @@ if __name__ == "__main__":
     print("proj_dim:", args.proj_dim)
     print("num_heads:", args.num_heads)
     print("num_nodes:", num_nodes)
+    print("num_edges:", num_edges)
     print("n_neighbors:", args.n_neighbors)
     print("memory_updater:", args.memory_updater)
 
     model = TGN(edge_feat_dim=edge_dim,
+                out_classes=classes,
                 memory_dim=args.memory_dim,
                 temporal_dim=args.temporal_dim,
                 embedding_dim=args.embedding_dim,
@@ -370,40 +295,63 @@ if __name__ == "__main__":
                 layers=args.k_hop, device=device).to(device)
     
     contrast_op = ContrastModule(args.embedding_dim, args.proj_dim).to(device)
-    criterion = torch.nn.BCEWithLogitsLoss()
+    # criterion = torch.nn.BCEWithLogitsLoss()
+    class_weights = class_weight.compute_class_weight(class_weight = 'balanced', 
+                                                classes = np.unique(data.edata['label'].numpy()), y = data.edata['label'].numpy())
+    class_weights = torch.FloatTensor(class_weights).to(device)
+    print("class_weights.dtype:", class_weights.dtype)
+    criterion = torch.nn.CrossEntropyLoss(weight = class_weights).float()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     # Implement Logging mechanism
 
+    dataset_path = "/root/zc/tgn_base_iot_nids/datasets/" + args.dataset + "/"
+    saved_folder = dataset_path + ("saved_multiclass/" if args.multi_class else "saved_binary/")
     train_batch_folder = saved_folder + "train_batch"
     test_batch_folder = saved_folder + "test_batch"
-    valid_batch_folder = saved_folder + "valid_batch"
-    test_new_batch_folder = saved_folder + "test_new_batch"
     
     try:
         for i in range(args.epochs):
             print("epoch ", i)
-            train_loss = train(model, contrast_op, train_dataloader, sampler, 
+            train_loss, train_acc = train(model, contrast_op, train_dataloader, sampler, 
                                criterion, optimizer, args, device, train_batch_folder)
-            val_ap, val_auc = test_val(
-                model, valid_dataloader, sampler, criterion, args, device, valid_batch_folder)
-            memory_checkpoint = model.store_memory()
-            test_ap, test_auc = test_val(
-                model, test_dataloader, sampler, criterion, args, device, test_batch_folder)
-            model.restore_memory(memory_checkpoint)
-            sample_nn = sampler
-            nn_test_ap, nn_test_auc = test_val(
-                model, test_new_node_dataloader, sample_nn, criterion, args, device, test_new_batch_folder)
-            log_content = []
-            log_content.append("Epoch: {}; Training Loss: {} | Validation AP: {:.3f} AUC: {:.3f}\n".format(
-                i, train_loss, val_ap, val_auc))
-            log_content.append(
-                "Epoch: {}; Test AP: {:.3f} AUC: {:.3f}\n".format(i, test_ap, test_auc))
-            log_content.append("Epoch: {}; Test New Node AP: {:.3f} AUC: {:.3f}\n".format(
-                i, nn_test_ap, nn_test_auc))
+            writer.add_scalar("train_loss/train", train_loss, i)
+            test_acc, test_actuals, test_preds, labels, total_test_loss, embs, scores = test(
+                model, test_dataloader, sampler, criterion, args, device, test_batch_folder, classes)
+            
+            # save edge embs
+            embs = [inner for outer in embs for inner in outer]
+            emb_num = np.array(embs)
+            np.save(str(destination_folder)+f"/epoch{i}_embs.npy", emb_num, allow_pickle=True)
+            
+            # save edge scores
+            scores = [inner for outer in scores for inner in outer]
+            scores_num = np.array(scores)
+            np.save(str(destination_folder)+f"/epoch{i}_scores.npy", scores_num, allow_pickle=True)
 
-            f.writelines(log_content)
+            test_actuals = ' '.join([' '.join(row) for row in test_actuals]).split()
+            test_preds = ' '.join([' '.join(row) for row in test_preds]).split()
+
+            # save labels
+            if i == 0:
+                test_actuals = np.array(test_actuals)
+                np.save(str(destination_folder)+f"/labels.npy", test_actuals, allow_pickle=True)
+            
+            # save preds
+            test_preds = np.array(test_preds)
+            np.save(str(destination_folder)+f"/epoch{i}_preds.npy", test_preds, allow_pickle=True)
+
+            writer.add_scalar("test_loss/test", total_test_loss, i)
+            writer.add_scalar("accuracy/test", test_acc, i)
+
+            memory_checkpoint = model.store_memory()
+            log_content = []
+            log_content.append("Epoch: {}; Training Loss: {} ; train_acc = {:.4f}\n".format(
+                i, train_loss, train_acc))
+            log_content.append("Epoch: {}; Test Loss: {} ; test_acc = {:.4f}\n".format(
+                i, total_test_loss, test_acc))
+            f.writelines(log_content) 
             model.reset_memory()
-            print(log_content[0], log_content[1], log_content[2])
+            print(log_content[0], log_content[1])
     except KeyboardInterrupt:
         traceback.print_exc()
         error_content = "Training Interreputed!"
