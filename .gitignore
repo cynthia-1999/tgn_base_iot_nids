@@ -5,4 +5,7 @@ __pycache__/
 utils/__init__.py
 log*
 /grace
+/cache
+/runs
+/GCA
 *.txt

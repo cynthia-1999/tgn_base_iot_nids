@@ -8,6 +8,7 @@ import os
 import numpy as np
 import dgl
 import torch
+from collections import Counter
 
 from tgn import TGN
 from utils.data_preprocess import MyTemporalDataset, TemporalBotiotDataset, TemporalToniotDataset
@@ -94,6 +95,7 @@ def train(model, contrast_op, dataloader, sampler, criterion, optimizer, args, d
         model.detach_memory()
         
         train_acc.append(compute_accuracy(predictions, labels))
+        print("Batch: ", batch_cnt, "Time: ", time.time()-last_t)
         last_t = time.time()
         batch_cnt += 1
     return total_loss, float(torch.tensor(train_acc).mean())
@@ -150,7 +152,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--multi_class", action="store_true", default=False,
                         help="test for multi classes")
-    parser.add_argument("--epochs", type=int, default=100,
+    parser.add_argument("--epochs", type=int, default=5,
                         help='epochs for training on entire dataset')
     parser.add_argument("--device_id", type=int,
                         default=3, help="gpu device id")
@@ -174,8 +176,10 @@ if __name__ == "__main__":
                         help="In embedding how node aggregate from its neighor")
     parser.add_argument("--num_heads", type=int, default=8,
                         help="Number of heads for multihead attention mechanism")
-    parser.add_argument("--dataset", type=str, default="wikipedia",
-                        help="dataset selection wikipedia/reddit")
+    parser.add_argument("--dataset", type=str, default="BoT-IoT",
+                        help="dataset selection BoT-IoT/ToN-IoT")
+    parser.add_argument("--split_by_classes", action="store_true", default=False,
+                        help="Split the training and test sets by classes")
     parser.add_argument("--k_hop", type=int, default=1,
                         help="sampling k-hop neighborhood")
     parser.add_argument("--not_use_memory", action="store_true", default=False,
@@ -190,7 +194,7 @@ if __name__ == "__main__":
 
     project_name = 'project_' + str(styleTime)
     # comments=f"dataset({args.dataset})_multiclas({args.multi_class})_bsize({args.batch_size})_embeddingdim({args.embedding_dim}_projdim({args.proj_dim})_"
-    comments=f"dataset({args.dataset})_multiclas({args.multi_class})"
+    comments=f"dataset({args.dataset})_multiclas({args.multi_class})_SplyByClasses({args.split_by_classes})"
     # dir_checkpoint = Path(f"./cache/{project_name}_{comments}/checkpoints/")
     writer = SummaryWriter(comment=comments)
     destination_folder = Path(f"./cache/{project_name}_{comments}/")
@@ -213,7 +217,6 @@ if __name__ == "__main__":
     elif args.dataset == 'ToN-IoT':
         data = TemporalToniotDataset(args.multi_class)
         classes = 10 if args.multi_class else 2
-
     else:
         print("Warning Using Untested Dataset: "+args.dataset)
         data = MyTemporalDataset(args.dataset)
@@ -224,25 +227,47 @@ if __name__ == "__main__":
 
     neg_sampler = None
 
+    print("data:", data)
     num_nodes = data.num_nodes()
     num_edges = data.num_edges()
-    traintest_div = int(TRAIN_SPLIT*num_edges)
-    test_split_ts = data.edata['timestamp'][traintest_div]
+    if not args.split_by_classes:
+        traintest_div = int(TRAIN_SPLIT*num_edges)
+        test_split_ts = data.edata['timestamp'][traintest_div]
+        
+        # eids = torch.arange(0, num_edges)
+        # train_edge_mask = (data.edata['timestamp'] <= test_split_ts) + (data.edata['timestamp'] <= 0)
+        # test_edge_mask = data.edata['timestamp'] > test_split_ts
 
-    print("data:", data)
-    eids = torch.arange(0, num_edges)
-    train_edge_mask = (data.edata['timestamp'] <= test_split_ts) + (data.edata['timestamp'] <= 0)
-    test_edge_mask = data.edata['timestamp'] > test_split_ts
+        # train_seed, test_seed = eids[train_edge_mask], eids[test_edge_mask]
+        
+        train_seed = np.where(data.edata['timestamp'] <= test_split_ts)[0] + np.where(data.edata['timestamp'] <= 0)[0]
+        test_seed = np.where(data.edata['timestamp'] > test_split_ts)[0]
+    else:
+        # 从data的边中按照labels均匀采样出70%的边
+        labels = data.edata['label'].numpy()
+        label_counter = Counter(labels)
+        print("label_counter:", label_counter)
 
-    train_seed, test_seed = eids[train_edge_mask], eids[test_edge_mask]
-    
+        train_seed = []
+        for label, ratio in label_counter.items():
+            label_edges = np.where(data.edata['label'] == label)[0]
+            print("label_edges.shape", label_edges.shape)
+            num_label_edges = int(TRAIN_SPLIT * len(label_edges))
+            print("num_label_edges:", num_label_edges)
+            train_seed.extend(np.random.choice(label_edges, num_label_edges, replace=False))
+
+        train_seed = np.sort(train_seed)
+
+        test_seed = np.array(list((set(np.arange(0, num_edges)) - set(train_seed))))
+
     print("train_seed:", train_seed)
     print("len(train_seed):", len(train_seed))
     print("test_seed:", test_seed)
     print("len(test_seed):", len(test_seed))
-    
-    g_sampling = data
+
+    g_sampling = data   
     g_sampling.ndata[dgl.NID] = g_sampling.nodes()
+
 
     # we highly recommend that you always set the num_workers=0, otherwise the sampled subgraph may not be correct.
     train_dataloader = TemporalEdgeDataLoader(data,
@@ -306,6 +331,10 @@ if __name__ == "__main__":
 
     dataset_path = "/root/zc/tgn_base_iot_nids/datasets/" + args.dataset + "/"
     saved_folder = dataset_path + ("saved_multiclass/" if args.multi_class else "saved_binary/")
+    if args.split_by_classes:
+        saved_folder = saved_folder + "split_by_classes/"
+    else:
+        saved_folder = saved_folder + "split_by_time/"
     train_batch_folder = saved_folder + "train_batch"
     test_batch_folder = saved_folder + "test_batch"
     
