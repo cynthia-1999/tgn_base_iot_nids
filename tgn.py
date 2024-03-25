@@ -1,7 +1,7 @@
 import copy
 import torch.nn as nn
 import dgl
-from graph_model.modules import MemoryModule, MemoryOperation, MsgLinkPredictor, MsgMalPredictor, TemporalTransformerConv, TimeEncode
+from graph_model.modules import MemoryModule, MemoryOperation, MsgLinkPredictor, MsgMalPredictor, ContrastModule,TemporalTransformerConv, TimeEncode
 
 
 class TGN(nn.Module):
@@ -11,6 +11,7 @@ class TGN(nn.Module):
                  memory_dim,
                  temporal_dim,
                  embedding_dim,
+                 proj_dim,
                  num_heads,
                  num_nodes,
                  n_neighbors=10,
@@ -22,12 +23,15 @@ class TGN(nn.Module):
         self.edge_feat_dim = edge_feat_dim
         self.temporal_dim = temporal_dim
         self.embedding_dim = embedding_dim
+        self.proj_dim = proj_dim
         self.num_heads = num_heads
         self.n_neighbors = n_neighbors
         self.memory_updater_type = memory_updater_type
         self.num_nodes = num_nodes
         self.layers = layers
         self.device = device
+
+        self.contrast_op = ContrastModule(self.embedding_dim, self.proj_dim).to(device)
 
         self.temporal_encoder = TimeEncode(self.temporal_dim).to(device)
 

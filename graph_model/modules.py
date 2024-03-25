@@ -45,6 +45,76 @@ class MsgMalPredictor(nn.Module):
         embs = g.edata['emb']
         return escore, embs
 
+class ContrastModule(nn.Module):
+    def __init__(self, num_hidden: int, num_proj_hidden: int,
+                 tau: float = 0.5):
+        super(ContrastModule, self).__init__()
+        self.tau: float = tau
+
+        self.fc1 = nn.Linear(num_hidden, num_proj_hidden)
+        self.fc2 = nn.Linear(num_proj_hidden, num_hidden)
+
+    def forward(self, x: torch.Tensor,
+                edge_index: torch.Tensor) -> torch.Tensor:
+        return self.encoder(x, edge_index)
+
+    def projection(self, z: torch.Tensor) -> torch.Tensor:
+        z = F.elu(self.fc1(z))
+        return self.fc2(z)
+
+    def sim(self, z1: torch.Tensor, z2: torch.Tensor):
+        z1 = F.normalize(z1)
+        z2 = F.normalize(z2)
+        return torch.mm(z1, z2.t())
+
+    def semi_loss(self, z1: torch.Tensor, z2: torch.Tensor):
+        f = lambda x: torch.exp(x / self.tau)
+        refl_sim = f(self.sim(z1, z1))
+        between_sim = f(self.sim(z1, z2))
+
+        return -torch.log(
+            between_sim.diag()
+            / (refl_sim.sum(1) + between_sim.sum(1) - refl_sim.diag()))
+
+    def batched_semi_loss(self, z1: torch.Tensor, z2: torch.Tensor,
+                          batch_size: int):
+        # Space complexity: O(BN) (semi_loss: O(N^2))
+        device = z1.device
+        num_nodes = z1.size(0)
+        num_batches = (num_nodes - 1) // batch_size + 1
+        f = lambda x: torch.exp(x / self.tau)
+        indices = torch.arange(0, num_nodes).to(device)
+        losses = []
+
+        for i in range(num_batches):
+            mask = indices[i * batch_size:(i + 1) * batch_size]
+            refl_sim = f(self.sim(z1[mask], z1))  # [B, N]
+            between_sim = f(self.sim(z1[mask], z2))  # [B, N]
+
+            losses.append(-torch.log(
+                between_sim[:, i * batch_size:(i + 1) * batch_size].diag()
+                / (refl_sim.sum(1) + between_sim.sum(1)
+                   - refl_sim[:, i * batch_size:(i + 1) * batch_size].diag())))
+
+        return torch.cat(losses)
+
+    def loss(self, z1: torch.Tensor, z2: torch.Tensor,
+             mean: bool = True, batch_size: int = 0):
+        h1 = self.projection(z1)
+        h2 = self.projection(z2)
+
+        if batch_size == 0:
+            l1 = self.semi_loss(h1, h2)
+            l2 = self.semi_loss(h2, h1)
+        else:
+            l1 = self.batched_semi_loss(h1, h2, batch_size)
+            l2 = self.batched_semi_loss(h2, h1, batch_size)
+
+        ret = (l1 + l2) * 0.5
+        ret = ret.mean() if mean else ret.sum()
+
+        return ret
+
 # 一个用于链接预测的模块，使用消息传递的方式来预测正样本子图和负样本子图之间的链接
 # 这个模块的目的是从子图中学习链接预测任务，其中正样本子图和负样本子图都包含节点特征以及它们之间的链接信息。
 # 通过消息传递和神经网络的组合，模块试图学习如何从节点特征中预测链接的存在或缺失。
@@ -443,7 +513,7 @@ class EdgeGATConv(nn.Module):
             graph.apply_edges(fn.u_add_e('el', 'ee', 'el_prime'))
             graph.apply_edges(fn.e_add_v('el_prime', 'er', 'e'))
             e = self.leaky_relu(graph.edata['e'])
-            # 计算遍的注意力权重
+            # 计算边的注意力权重
             graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
             graph.edata['efeat'] = edge_feat
             graph.update_all(self.msg_fn, fn.sum('m', 'ft'))
