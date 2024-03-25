@@ -71,6 +71,8 @@ def my_preprocess(data_path, data_name, multi_class):
         print("test")
         data.drop(columns=['category'],inplace=True)
         data.rename(columns={"attack": "label"},inplace = True)
+    data['label'] = data.label.apply(int)
+    
     data['saddr'] = data.saddr.apply(str)
     data['sport'] = data.sport.apply(str)
     data['daddr'] = data.daddr.apply(str)

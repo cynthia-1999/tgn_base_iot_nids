@@ -18,7 +18,6 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.utils import class_weight
 from sklearn.preprocessing import OneHotEncoder
 
-from contrast import drop_feature, ContrastModule
 from torch.utils.tensorboard import SummaryWriter
 
 TRAIN_SPLIT = 0.7
@@ -45,29 +44,21 @@ def my_clone_graph(g, device):
 def compute_accuracy(pred, labels):
     return (pred.argmax(1) == labels).float().mean().item()
 
-def make_train_batch(model, contrast_op, dataloader, sampler, criterion, optimizer, args, device, batch_folder):
-    total_loss = 0
+def make_train_batch(dataloader, batch_folder):
     batch_cnt = 0
-    train_acc = []
     last_t = time.time()
     for _, g, blocks in dataloader:
         dgl.save_graphs(batch_folder + '/batch{}.bin'.format(batch_cnt), [g, blocks[0]])
         print("Batch: ", batch_cnt, "Time: ", time.time()-last_t)
         last_t = time.time()
         batch_cnt += 1
-    return total_loss, float(torch.tensor(train_acc).mean())
 
-def make_test_batch(model, dataloader, sampler, criterion, args, device, batch_folder, classes):
-    total_loss = 0
-    actuals, test_preds, test_embeddings, test_scores = [], [], [], []
-    test_acc = []
+def make_test_batch(dataloader, batch_folder):
     batch_cnt = 0
-    label2actual = []
     with torch.no_grad():
         for _, g, blocks in dataloader:
             dgl.save_graphs(batch_folder + '/batch{}.bin'.format(batch_cnt), [g, blocks[0]])
             batch_cnt += 1
-    return float(torch.tensor(test_acc).mean()), actuals, test_preds, label2actual, total_loss, test_embeddings, test_scores
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -174,7 +165,7 @@ if __name__ == "__main__":
     print("len(train_seed):", len(train_seed))
     print("test_seed:", test_seed)
     print("len(test_seed):", len(test_seed))
-
+    
     g_sampling = data   
     g_sampling.ndata[dgl.NID] = g_sampling.nodes()
 
@@ -204,26 +195,7 @@ if __name__ == "__main__":
                                              collator=edge_collator,
                                              g_sampling=g_sampling)
 
-
-    edge_dim = data.edata['feats'].shape[1]
-
-    print("edge_dim:", edge_dim)
-    print("memory_dim:", args.memory_dim)
-    print("temporal_dim:", args.temporal_dim)
-    print("embedding_dim:", args.embedding_dim)
-    print("proj_dim:", args.proj_dim)
-    print("num_heads:", args.num_heads)
-    print("num_nodes:", num_nodes)
-    print("num_edges:", num_edges)
-    print("n_neighbors:", args.n_neighbors)
-    print("memory_updater:", args.memory_updater)
-
-    model = 0
     
-    contrast_op = 0
-    # criterion = torch.nn.BCEWithLogitsLoss()
-    criterion = 0
-    optimizer = 0
     # Implement Logging mechanism
 
     dataset_path = "/root/zc/tgn_base_iot_nids/datasets/" + args.dataset + "/"
@@ -234,16 +206,40 @@ if __name__ == "__main__":
         saved_folder = saved_folder + "split_by_time/"
     train_batch_folder = saved_folder + "train_batch_new"
     test_batch_folder = saved_folder + "test_batch_new"
+
+    if not args.multi_class:
+        label2actual = ["Normal", "Attack"]
+    else:
+        label2actual = np.load(test_batch_folder + '/actual.npy', allow_pickle=True)
+
+    # save raw data and
+    labels = data.edata['label'].numpy().astype(int)
+    feats = data.edata['feats'].numpy()
+    train_edge_feats = [feats[n] for n in train_seed]
+    test_edge_feats = [feats[n] for n in test_seed]
+
+    train_edge_feats=np.array(train_edge_feats)
+    test_edge_feats=np.array(test_edge_feats)
     
+    train_edge_labels = [labels[n] for n in train_seed]
+    test_edge_labels = [labels[n] for n in test_seed]
+    
+    
+    train_edge_actuals = [label2actual[label] for label in train_edge_labels]
+    test_edge_actuals = [label2actual[label] for label in test_edge_labels]
+
+    train_edge_actuals = np.array(train_edge_actuals)
+    test_edge_actuals = np.array(test_edge_actuals)
+
+    np.save(str(train_batch_folder)+f"/train_raw_data.npy", train_edge_feats, allow_pickle=True)
+    np.save(str(test_batch_folder)+f"/test_raw_data.npy", test_edge_feats, allow_pickle=True)
+    np.save(str(train_batch_folder)+f"/train_edge_actuals.npy", train_edge_actuals, allow_pickle=True)
+    np.save(str(test_batch_folder)+f"/test_edge_actuals.npy", test_edge_actuals, allow_pickle=True)
+
+
     try:
-        for i in range(args.epochs):
-            print("epoch ", i)
-            train_loss, train_acc = make_train_batch(model, contrast_op, train_dataloader, sampler, 
-                               criterion, optimizer, args, device, train_batch_folder)
-            
-            test_acc, test_actuals, test_preds, labels, total_test_loss, embs, scores = make_test_batch(
-                model, test_dataloader, sampler, criterion, args, device, test_batch_folder, classes)     
-            # '''
+        make_train_batch(train_dataloader, train_batch_folder)
+        make_test_batch(test_dataloader, classes)     
     except KeyboardInterrupt:
         traceback.print_exc()
         error_content = "Training Interreputed!"
