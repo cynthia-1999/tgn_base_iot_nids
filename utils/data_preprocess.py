@@ -15,6 +15,24 @@ from sklearn.preprocessing import StandardScaler
 
 from utils.edit_table import move_column_to_position_in_data
 
+def drop_feature(x, drop_prob):
+    drop_mask = torch.empty(
+        (x.size(1), ),
+        dtype=torch.float32,
+        device=x.device).uniform_(0, 1) < drop_prob
+    x = x.clone()
+    x[:, drop_mask] = 0
+    return x
+
+def drop_edge(edge_index, drop_prob):
+    drop_mask = torch.empty(
+        (edge_index.size(0)),
+        dtype=torch.float32,
+        device=edge_index.device).uniform_(0, 1) < drop_prob
+    remove_edge_index = torch.arange(edge_index.size(0), dtype=torch.int64, device=edge_index.device)
+    remove_edge_index = remove_edge_index[drop_mask]
+    return remove_edge_index
+
 # Re index nodes for DGL convience
 def reindex(df, bipartite=True):
     new_df = df.copy()
@@ -38,8 +56,7 @@ def reindex(df, bipartite=True):
 
 def my_preprocess(data_path, data_name, multi_class):
     data = pd.read_csv(data_path)
-    # data = data.head(4000000)
-    data.drop(columns=['pkSeqID', 'flgs', 'proto', 'state', 'seq', 'subcategory'],inplace=True)
+    data.drop(columns=['pkSeqID', 'flgs', 'seq', 'subcategory'],inplace=True)
 
     if multi_class:
         data.drop(columns=['attack'],inplace=True)
@@ -48,13 +65,12 @@ def my_preprocess(data_path, data_name, multi_class):
         le = LabelEncoder()
         le.fit_transform(data.label.values)
         data['label'] = le.transform(data['label'])
-        label2actual = le.inverse_transform([0, 1, 2, 3, 4])
-        np.save('/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_multiclass/test_batch/actual.npy', label2actual, allow_pickle=True)
+        # label2actual = le.inverse_transform([0, 1, 2, 3, 4])
+        # np.save('/root/zc/tgn_base_iot_nids/datasets/BoT-IoT/saved_multiclass/test_batch/actual.npy', label2actual, allow_pickle=True)
     else:
         print("test")
         data.drop(columns=['category'],inplace=True)
         data.rename(columns={"attack": "label"},inplace = True)
-    print("data.columns:", data.columns)
     data['saddr'] = data.saddr.apply(str)
     data['sport'] = data.sport.apply(str)
     data['daddr'] = data.daddr.apply(str)
@@ -65,15 +81,18 @@ def my_preprocess(data_path, data_name, multi_class):
     data['daddr'] = data['daddr'] + ':' + data['dport']
     
     data.drop(columns=['sport','dport'],inplace=True)
-    
-    data = pd.get_dummies(data, columns = ['flgs_number','state_number', 'proto_number'])
+    data = pd.get_dummies(data, columns = ['proto', 'state'])
 
     data = data.reset_index()
     data.replace([np.inf, -np.inf], np.nan,inplace = True)
     data.fillna(0,inplace = True)
         
+    print("data.columns:", data.columns)
+    data = move_column_to_position_in_data(data, 'saddr', 1)
+    data = move_column_to_position_in_data(data, 'daddr', 2)
     data = move_column_to_position_in_data(data, 'stime', 3)
-    
+    print("data.columns:", data.columns)
+
     scaler = StandardScaler()
     cols_to_norm = list(set(list(data.iloc[:, 4:].columns )) - set(list(['label'])))
     data[cols_to_norm] = scaler.fit_transform(data[cols_to_norm])
@@ -81,12 +100,10 @@ def my_preprocess(data_path, data_name, multi_class):
     data = move_column_to_position_in_data(data, 'label', 4)
     data.drop(columns=['index'],inplace=True)
     # print("data.label.value_counts:", data.label.value_counts())
-    # move_column_to_position_in_data(data, 'saddr', 0)
-    # move_column_to_position_in_data(data, 'daddr', 1)
-    # move_column_to_position_in_data(data, 'stime', 2)
-    # move_column_to_position_in_data(data, 'label', 3)
 
     print("data.columns:", data.columns)
+    # sort by ts
+    data = data.sort_values(by='stime')
     
     u_list, i_list, ts_list, label_list = [], [], [], []
     feat_l = []
@@ -111,10 +128,35 @@ def my_preprocess(data_path, data_name, multi_class):
                          'label': label_list,
                          'idx': idx_list}), np.array(feat_l)      
 
-def ton_preprocess(data_path, data_name, multi_class):
+def ton_preprocess(data_path, data_name, multi_class, used_all_data):
     data = pd.read_csv(data_path)
+    data = data.sort_values(by='ts')
+    # data = data.head(int(data.shape[0] * 0.1))
     print(data.type.value_counts())
-    data = data.sample(frac=0.1,random_state = 123)
+    # if not used_all_data:
+    #     mitm = data[data['type'] == 'mitm']
+    #     ransomware = data[data['type'] == 'ransomware']
+    #     df = data.drop(data[(data.type == 'mitm') | (data.type == 'ransomware')].index)
+    #     df = df.sample(frac=0.1,random_state = 42)
+    #     data = pd.concat([df,mitm,ransomware], axis=0, ignore_index=True)
+    #     print(data.type.value_counts())
+
+    scanning = data[data['type'] == 'scanning']
+    ddos = data[data['type'] == 'ddos']
+    dos = data[data['type'] == 'dos']
+    xss = data[data['type'] == 'xss']
+    password = data[data['type'] == 'password']
+
+    scanning = scanning.head(int(scanning.shape[0] * 0.1))
+    ddos = ddos.head(int(ddos.shape[0] * 0.1))
+    dos = dos.head(int(dos.shape[0] * 0.1))
+    xss = xss.head(int(xss.shape[0] * 0.1))
+    password = password.head(int(password.shape[0] * 0.1))
+
+    df = data.drop(data[(data.type == 'scanning') | (data.type == 'ddos') | (data.type == 'dos') | (data.type == 'xss') | (data.type == 'password')].index)
+    data = pd.concat([df, scanning, ddos, dos, xss, password], axis=0, ignore_index=True)
+    print(data.type.value_counts())
+    data = data.sort_values(by='ts')
 
     data['src_ip'] = data.src_ip.apply(str)
     data['src_port'] = data.src_port.apply(str)
@@ -127,7 +169,7 @@ def ton_preprocess(data_path, data_name, multi_class):
     print(data.type.value_counts())
     print(data['http_trans_depth'].unique())
 
-    data.drop(columns=['src_port','dst_port','http_uri', 'http_referrer', 'weird_name','weird_addl','weird_notice','dns_query','ssl_subject','ssl_issuer','http_user_agent'],inplace=True)
+    data.drop(columns=['src_port','dst_port','http_uri', 'http_referrer', 'weird_name','weird_addl','dns_query','ssl_subject','ssl_issuer'],inplace=True)
     
     if multi_class:
         data.drop(columns=['label'],inplace=True)
@@ -136,9 +178,9 @@ def ton_preprocess(data_path, data_name, multi_class):
         le = LabelEncoder()
         le.fit_transform(data.label.values)
         data['label'] = le.transform(data['label'])
-        label2actual = le.inverse_transform([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-        np.save('/root/zc/tgn_base_iot_nids/datasets/ToN-IoT/saved_multiclass/test_batch/actual.npy', label2actual, allow_pickle=True)
-        print("label2actual:", label2actual)
+        # label2actual = le.inverse_transform([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+        # np.save('/root/zc/tgn_base_iot_nids/datasets/ToN-IoT/saved_multiclass/test_batch/actual.npy', label2actual, allow_pickle=True)
+        # print("label2actual:", label2actual)
     else:
         data.drop(columns=['type'],inplace=True)
     data['label'] = data.label.apply(int)
@@ -148,8 +190,14 @@ def ton_preprocess(data_path, data_name, multi_class):
 
     label = data.label
     scaler = StandardScaler()
+    # 'proto','service','conn_state' 进行独热编码
+    data = pd.get_dummies(data, columns = ['proto'])
 
-    encoder = ce.TargetEncoder(cols=['proto','service','conn_state','dns_qclass','dns_qtype','dns_rcode','dns_AA','dns_RD','dns_RA','dns_rejected','ssl_version','ssl_cipher','ssl_resumed','ssl_established','http_method','http_version','http_status_code','http_orig_mime_types','http_resp_mime_types','http_trans_depth'])
+    # 下述特征进行标签编码
+    # 'dns_AA','dns_RD','dns_RA','dns_rejected', 'ssl_resumed','ssl_established','weird_notice', 
+    # 'http_trans_depth', 'http_user_agent','dns_rcode',
+    # 'service','conn_state','dns_qclass','dns_qtype','ssl_version','ssl_cipher','http_method','http_version','http_status_code','http_orig_mime_types','http_resp_mime_types'
+    encoder = ce.TargetEncoder(cols=['dns_AA','dns_RD','dns_RA','dns_rejected', 'ssl_resumed','ssl_established','weird_notice', 'http_trans_depth', 'http_user_agent','dns_rcode', 'dns_qclass','dns_qtype','ssl_version','ssl_cipher','http_method','http_version','http_status_code','http_orig_mime_types','http_resp_mime_types'])
     encoder.fit(data, label)
     data = encoder.transform(data)
 
@@ -160,7 +208,6 @@ def ton_preprocess(data_path, data_name, multi_class):
         tmp_data[col] = pd.to_numeric(tmp_data[col], errors='coerce')
         nan_indices = tmp_data[tmp_data[col].isnull()].index
         data.loc[nan_indices, col] = 0
-        print(nan_indices)
 
     data[cols_to_norm] = scaler.fit_transform(data[cols_to_norm])
     print("data.columns:", data.columns)
@@ -196,7 +243,9 @@ def my_run(folder, dataset, file_name, multi_class, bipartite=True):
     if dataset == "BoT-IoT":
         df, feat = my_preprocess(PATH, dataset, multi_class)
     elif dataset == "ToN-IoT":
-        df, feat = ton_preprocess(PATH, dataset, multi_class)
+        df, feat = ton_preprocess(PATH, dataset, multi_class, False)
+    elif dataset == "ToN-IoT-All":
+        df, feat = ton_preprocess(PATH, dataset, multi_class, True)
     # new_df = reindex(df, bipartite)
 
     empty = np.zeros(feat.shape[1])[np.newaxis, :]
@@ -240,3 +289,6 @@ def TemporalBotiotDataset(multi_class):
 
 def TemporalToniotDataset(multi_class):
     return MyTemporalDataset('ToN-IoT', multi_class)
+
+def TemporalToniotAllDataset(multi_class):
+    return MyTemporalDataset('ToN-IoT-All', multi_class)
